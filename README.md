@@ -5,9 +5,8 @@
 **Equipo de Desarrollo:**  
 - Ricardo Lugo Chavira
 - Vanessa Fernanda Colin Gerardo
-
--Joana Nataly Gomez Gomez
--Alan Ramses Gonzalez Ruiz
+- Joana Nataly Gomez Gomez
+- Alan Ramses Gonzalez Ruiz
 
 ---
 
@@ -36,18 +35,18 @@ Durante el semestre desarrollaremos **SecureCampus** como un equipo de desarroll
 
 El sistema delimita las capacidades de tres actores principales aplicando el principio de mínimo privilegio:
 
-###  Estudiante
+### Estudiante
 - Perfil propio exclusivo.
 - Consulta de calificaciones e historial académico propio.
 - Gestión y descarga de documentos propios autorizados.
 - Registro y seguimiento de solicitudes e historial.
 
-###  Profesor
+### Profesor
 - Gestión de perfil docente.
 - Consulta de grupos asignados y listas autorizadas.
 - Captura, modificación y cierre de calificaciones de sus materias asignadas.
 
-###  Administrador
+### Administrador
 - Administración integral de usuarios.
 - Asignación y control de roles y permisos del sistema (RBAC).
 - Supervisión mediante consulta y auditoría de logs.
