@@ -62,8 +62,4 @@ Tres actores iniciales con necesidades distintas, complementados con la gestión
 
 ---
 
-## 4. Estructura de Evidencias
 
-- `README.md`: Visión general, problemática, misión y catálogo oficial de actores de SecureCampus.
-- `docs/security/`: Documentación y bitácora de análisis de seguridad por laboratorio:
-  - `SC-LAB-001-analisis-inicial.md`: Matriz de activos, amenazas, vulnerabilidades y controles iniciales.
