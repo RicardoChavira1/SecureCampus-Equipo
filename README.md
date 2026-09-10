@@ -3,10 +3,11 @@
 **Curso:** Desarrollo Seguro  
 **Proyecto:** Sistema Web Académico Institucional  
 **Equipo de Desarrollo:**  
-- Ricardo Lugo Chavira
-- Vanessa Fernanda Colin Gerardo
-- Joana Nataly Gomez Gomez
-- Alan Ramses Gonzalez Ruiz
+- Colin Gerardo Vanessa Fernanda	22280383
+- Gómez Gómez Joana Nataly 		    22280294
+- González Ruiz Alan Ramses		    22280356
+- Lugo Chavira Ricardo			    22280388
+
 
 ---
 
