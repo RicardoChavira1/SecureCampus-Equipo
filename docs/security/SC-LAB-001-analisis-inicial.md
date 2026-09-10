@@ -58,4 +58,4 @@
 ## 4. Pregunta de salida
 
 - **¿Qué protegerías primero en SecureCampus y qué podría impedir que ese activo permanezca seguro?**  
-   Protegeríamos primero el mecanismo de autenticación y las sesiones de profesores y administradores. Podría verse comprometido por la ausencia de bloqueos ante fuerza bruta, contraseñas débiles o sesiones que no expiren de manera adecuada en el servidor.
+   El control de autorización por roles y permisos debería definirse desde la etapa de requisitos y diseño, porque desde el inicio se debe establecer qué acciones puede realizar cada tipo de usuario. Esto ayuda a evitar que estudiantes, profesores o administradores accedan a funciones o información que no les corresponden y reduce la necesidad de hacer cambios grandes cuando el sistema ya esté desarrollado.
