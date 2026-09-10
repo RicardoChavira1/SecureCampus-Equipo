@@ -15,7 +15,7 @@
 Un sistema académico institucional concentra información y operaciones críticas que no todos los usuarios deben utilizar de la misma manera:
 
 - **Información sensible y de valor:** Perfiles personales, historiales de calificaciones, documentación oficial y solicitudes académicas requieren protección de confidencialidad e integridad.
-- **Capacidades diferenciadas:** Estudiantes, profesores y administradores necesitan permisos y accesos operativos completamente distintos según su rol.
+- **Capacidades diferenciadas:** Estudiantes, profesores, administradores y jefes de carrera interactúan bajo necesidades operativas y niveles de privilegio específicos según su rol.
 - **Seguridad más allá de la funcionalidad:** Una función que opera correctamente a nivel visual puede ser insegura si el backend no protege la identidad, los datos y los permisos en cada petición.
 
 ---
@@ -31,23 +31,39 @@ Durante el semestre desarrollaremos **SecureCampus** como un equipo de desarroll
 
 ---
 
-## 3. Actores de SecureCampus
+## 3. Los actores de SecureCampus
 
-El sistema delimita las capacidades de tres actores principales aplicando el principio de mínimo privilegio:
+Tres actores iniciales con necesidades distintas, complementados con la gestión académica del Jefe de Carrera:
 
 ### Estudiante
-- Perfil propio exclusivo.
-- Consulta de calificaciones e historial académico propio.
-- Gestión y descarga de documentos propios autorizados.
-- Registro y seguimiento de solicitudes e historial.
+- Perfil propio.
+- Calificaciones propias.
+- Documentos propios.
+- Solicitudes e historial.
 
 ### Profesor
-- Gestión de perfil docente.
-- Consulta de grupos asignados y listas autorizadas.
-- Captura, modificación y cierre de calificaciones de sus materias asignadas.
+- Perfil.
+- Grupos asignados.
+- Captura de calificaciones.
+- Listas autorizadas.
 
 ### Administrador
-- Administración integral de usuarios.
-- Asignación y control de roles y permisos del sistema (RBAC).
-- Supervisión mediante consulta y auditoría de logs.
-- Aprobación de operaciones académicas condicionadas.
+- Perfil.
+- Usuarios.
+- Roles y permisos.
+- Logs.
+- Operaciones condicionadas.
+
+### Jefe de Carrera
+- Perfil.
+- Dar de alta y baja profesores.
+- Creación de grupos.
+- Inscripción.
+
+---
+
+## 4. Estructura de Evidencias
+
+- `README.md`: Visión general, problemática, misión y catálogo oficial de actores de SecureCampus.
+- `docs/security/`: Documentación y bitácora de análisis de seguridad por laboratorio:
+  - `SC-LAB-001-analisis-inicial.md`: Matriz de activos, amenazas, vulnerabilidades y controles iniciales.
