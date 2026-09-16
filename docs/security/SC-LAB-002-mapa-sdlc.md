@@ -53,7 +53,7 @@ Debemos actuar desde las fases tempranas (Requisitos y Diseño) aplicando Shift 
 1. **¿Qué riesgo necesitó controles en más fases?**  
    El control de acceso a calificaciones y documentos (IDOR/BOLA), ya que requiere definición funcional, arquitectura de autorización, codificación defensiva, pruebas negativas y bitácoras de auditoría en producción.
 2. **¿Qué habría ocurrido si el equipo hubiera esperado hasta pruebas?**  
-   Los costos de remediación se habrían multiplicado significativamente, pues corregir fallas de autorización al final obliga a rediseñar la base de datos, las relaciones y reescribir gran parte de los controladores de la API.
+   Si el equipo hubiera esperado hasta la fase de pruebas, las vulnerabilidades ya podrían estar presentes en el diseño y en el código del sistema. Corregirlas en ese momento implicaría modificar componentes ya desarrollados, repetir pruebas y posiblemente rediseñar controles de acceso. Por eso es más conveniente integrar la seguridad desde requisitos y diseño, y mantenerla durante las demás fases del SDLC.
 3. **¿Qué control depende de una regla de negocio y cuál puede automatizarse?**  
    - *Regla de negocio:* La asignación y validación de que un profesor solo capture calificaciones en su grupo (Escenario C).
    - *Automatizable:* El bloqueo de peticiones por fuerza bruta (Rate Limiting) y la detección de tokens mediante herramientas SAST y pre-commit hooks (Escenario B y D).
