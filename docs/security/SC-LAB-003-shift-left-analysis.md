@@ -58,7 +58,7 @@ Sí. Aunque no se pueda prever la vulnerabilidad específica, se pueden preparar
 ---
 
 ## 6. Reflexión
-- Shift Left no elimina la necesidad de seguridad en operación, solo reduce costos tempranos.  
+- Shift Left no elimina la necesidad de mantener controles de seguridad en operación. Su objetivo es detectar y prevenir problemas lo antes posible durante el desarrollo, reduciendo el retrabajo y el costo de corregir vulnerabilidades. Aun así, el monitoreo, la actualización de dependencias y la respuesta ante nuevas amenazas siguen siendo necesarios cuando el sistema ya está en producción.
 - Una funcionalidad puede cumplir requisitos funcionales y seguir siendo insegura si no se definieron criterios de seguridad.  
 - La decisión más barata de corregir antes fue separar permisos en el caso del administrador.
 
