@@ -13,7 +13,7 @@
 
 ## 1. Pregunta guía
 **¿Qué puede descubrir una herramienta al analizar el código fuente y qué puede descubrir al interactuar con una aplicación en ejecución?**  
-El análisis estático (SAST) descubre debilidades estructurales internas como consultas SQL concatenadas, funciones deprecadas, falta de sanitización y secretos expuestos sin requerir el despliegue del sistema. La interacción en ejecución (DAST) descubre fallos observables en tiempo real desde el exterior, como Cross-Site Scripting (XSS) reflejado, cabeceras HTTP de seguridad ausentes y respuestas indebidas del servidor frente a peticiones anómalas.
+El análisis estático (SAST) descubre cuales son las debilidades estructurales internas como consultas SQL concatenadas, funciones deprecadas, falta de sanitización y secretos expuestos sin requerir el despliegue del sistema. La interacción en ejecución (DAST) descubre fallos observables en tiempo real desde el exterior, como Cross-Site Scripting (XSS) reflejado, cabeceras HTTP de seguridad ausentes y respuestas indebidas del servidor frente a peticiones anómalas.
 
 ---
 
