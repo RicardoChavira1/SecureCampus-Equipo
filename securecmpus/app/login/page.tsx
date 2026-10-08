@@ -18,7 +18,8 @@ import {
   EyeOff, 
   AlertCircle, 
   Clock, 
-  Send 
+  Send,
+  KeyRound
 } from "lucide-react";
 
 export default function LoginPage() {
@@ -31,16 +32,18 @@ export default function LoginPage() {
   const [unverifiedUser, setUnverifiedUser] = useState<any | null>(null);
   const [resendStatus, setResendStatus] = useState<string | null>(null);
   
-  // Rate limiting local persistido
+  // Rate Limiting (5 intentos fallidos -> Bloqueo de 15 minutos)
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [lockSecondsRemaining, setLockSecondsRemaining] = useState(0);
 
   const DOMINIOS_VALIDOS = ["@toluca.tecnm.mx", "@ittoluca.edu.mx"];
+  const MAX_INTENTOS = 5;
+  const TIEMPO_BLOQUEO_MS = 15 * 60 * 1000; // 15 minutos
 
-  // Sincronización inicial y temporizador regresivo de bloqueo
+  // Carga y validación del temporizador persistido
   useEffect(() => {
-    const savedLock = sessionStorage.getItem("sc_login_lock");
-    const savedAttempts = sessionStorage.getItem("sc_login_attempts");
+    const savedLock = localStorage.getItem("sc_login_lock");
+    const savedAttempts = localStorage.getItem("sc_login_attempts");
     
     if (savedAttempts) {
       setFailedAttempts(parseInt(savedAttempts, 10));
@@ -52,21 +55,22 @@ export default function LoginPage() {
       if (remaining > 0) {
         setLockSecondsRemaining(remaining);
       } else {
-        sessionStorage.removeItem("sc_login_lock");
-        sessionStorage.removeItem("sc_login_attempts");
+        localStorage.removeItem("sc_login_lock");
+        localStorage.removeItem("sc_login_attempts");
+        setFailedAttempts(0);
       }
     }
   }, []);
 
-  // Intervalo para el contador del bloqueo
+  // Contador regresivo
   useEffect(() => {
     if (lockSecondsRemaining <= 0) return;
 
     const timer = setInterval(() => {
       setLockSecondsRemaining((prev) => {
         if (prev <= 1) {
-          sessionStorage.removeItem("sc_login_lock");
-          sessionStorage.removeItem("sc_login_attempts");
+          localStorage.removeItem("sc_login_lock");
+          localStorage.removeItem("sc_login_attempts");
           setFailedAttempts(0);
           setErrorMsg("");
           return 0;
@@ -78,6 +82,12 @@ export default function LoginPage() {
     return () => clearInterval(timer);
   }, [lockSecondsRemaining]);
 
+  const formatearTiempo = (segundosTotales: number) => {
+    const min = Math.floor(segundosTotales / 60);
+    const seg = segundosTotales % 60;
+    return `${min}:${seg < 10 ? "0" : ""}${seg}`;
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (lockSecondsRemaining > 0) return;
@@ -87,7 +97,6 @@ export default function LoginPage() {
     setUnverifiedUser(null);
     setResendStatus(null);
 
-    // 1. Normalización de entrada
     const correoNormalizado = correo.trim().toLowerCase();
     const esDominioValido = DOMINIOS_VALIDOS.some((d) => correoNormalizado.endsWith(d));
 
@@ -99,24 +108,10 @@ export default function LoginPage() {
     }
 
     try {
-      // 2. Autenticación con Firebase Auth
       const userCredential = await signInWithEmailAndPassword(auth, correoNormalizado, password);
       const user = userCredential.user;
 
-      /* ==============================================================
-         CONTROL COMENTADO TEMPORALMENTE PARA ENTORNO DE PRUEBAS:
-         Descomentar en producción para forzar validación de correo institucional.
-
-      if (!user.emailVerified) {
-        setUnverifiedUser(user);
-        await signOut(auth);
-        setErrorMsg("Cuenta no confirmada. Requiere verificación de correo institucional.");
-        setLoading(false);
-        return;
-      }
-      ============================================================== */
-
-      // 3. Consulta de permisos en Firestore (RBAC & Aislamiento de expediente)
+      // Validación en Firestore (RBAC y cuenta activa)
       const userDocRef = doc(db, "usuarios", user.uid);
       const userSnapshot = await getDoc(userDocRef);
 
@@ -131,16 +126,17 @@ export default function LoginPage() {
 
       if (!userData.activo) {
         await signOut(auth);
-        setErrorMsg("Cuenta suspendida temporalmente. Contacte a la administración.");
+        setErrorMsg("Cuenta suspendida administrativamente o bloqueada por seguridad.");
         setLoading(false);
         return;
       }
 
-      // Limpieza de intentos fallidos tras autenticación exitosa
-      sessionStorage.removeItem("sc_login_attempts");
-      sessionStorage.removeItem("sc_login_lock");
+      // Limpieza de contadores al autenticarse correctamente
+      localStorage.removeItem("sc_login_attempts");
+      localStorage.removeItem("sc_login_lock");
+      setFailedAttempts(0);
 
-      // 4. Redirección por Rol (RBAC)
+      // Redirección por Rol
       switch (userData.rol) {
         case "ESTUDIANTE":
           router.push("/estudiante/calificaciones");
@@ -160,16 +156,16 @@ export default function LoginPage() {
     } catch (err: unknown) {
       const nextAttempts = failedAttempts + 1;
       setFailedAttempts(nextAttempts);
-      sessionStorage.setItem("sc_login_attempts", nextAttempts.toString());
+      localStorage.setItem("sc_login_attempts", nextAttempts.toString());
 
-      if (nextAttempts >= 5) {
-        const lockTime = Date.now() + 60000;
-        sessionStorage.setItem("sc_login_lock", lockTime.toString());
-        setLockSecondsRemaining(60);
-        setErrorMsg("Demasiados intentos fallidos. Interfaz pausada por seguridad.");
+      if (nextAttempts >= MAX_INTENTOS) {
+        const lockTime = Date.now() + TIEMPO_BLOQUEO_MS;
+        localStorage.setItem("sc_login_lock", lockTime.toString());
+        setLockSecondsRemaining(Math.ceil(TIEMPO_BLOQUEO_MS / 1000));
+        setErrorMsg("Has superado el límite de 5 intentos. Acceso pausado por 15 minutos o recupera tu contraseña.");
       } else {
-        // Mensaje genérico contra enumeración de cuentas
-        setErrorMsg("Credenciales de acceso inválidas o usuario inactivo.");
+        const restantes = MAX_INTENTOS - nextAttempts;
+        setErrorMsg(`Credenciales de acceso inválidas. (${restantes} intento${restantes > 1 ? "s" : ""} restante${restantes > 1 ? "s" : ""})`);
       }
     } finally {
       setLoading(false);
@@ -190,7 +186,6 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-[calc(100vh-140px)] flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8 relative">
-      {/* Resplandor ambiental de fondo */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-blue-600/10 blur-[130px] -z-10 pointer-events-none rounded-full" />
 
       <div className="max-w-md w-full space-y-6 bg-slate-900/70 p-8 rounded-2xl border border-slate-800 shadow-2xl backdrop-blur-md">
@@ -214,6 +209,16 @@ export default function LoginPage() {
             <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
             <div className="space-y-1">
               <p>{errorMsg}</p>
+              {bloqueado && (
+                <div className="pt-2">
+                  <Link
+                    href="/recuperar"
+                    className="inline-flex items-center gap-1.5 text-blue-400 hover:text-blue-300 font-bold underline"
+                  >
+                    <KeyRound className="w-3.5 h-3.5" /> Restablecer contraseña ahora
+                  </Link>
+                </div>
+              )}
               {unverifiedUser && (
                 <button
                   type="button"
@@ -232,16 +237,18 @@ export default function LoginPage() {
 
         {/* Notificación de Bloqueo Activo */}
         {bloqueado && (
-          <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-2 font-mono">
-            <Clock className="w-4 h-4 text-amber-400 animate-spin" />
-            <span>Pausa preventiva: reintenta en {lockSecondsRemaining}s</span>
+          <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center justify-between font-mono">
+            <div className="flex items-center gap-2">
+              <Clock className="w-4 h-4 text-amber-400 animate-spin" />
+              <span>Bloqueo preventivo:</span>
+            </div>
+            <span className="font-bold text-amber-200">{formatearTiempo(lockSecondsRemaining)}</span>
           </div>
         )}
 
         {/* Formulario */}
         <form className="space-y-4" onSubmit={handleLogin}>
           
-          {/* Correo */}
           <div>
             <label 
               htmlFor="correo" 
@@ -267,7 +274,6 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {/* Contraseña */}
           <div>
             <label 
               htmlFor="password" 
@@ -305,7 +311,6 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {/* Enlace y Etiquetas */}
           <div className="flex items-center justify-between text-xs pt-1">
             <span className="text-slate-500 font-mono text-[10px] flex items-center gap-1">
               <ShieldCheck className="w-3.5 h-3.5 text-blue-400" /> Token RBAC
@@ -318,13 +323,16 @@ export default function LoginPage() {
             </Link>
           </div>
 
-          {/* Botón de Envío */}
           <button
             type="submit"
             disabled={loading || bloqueado}
             className="w-full flex justify-center py-2.5 px-4 border border-transparent text-sm font-bold rounded-xl text-white bg-blue-600 hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-600/20"
           >
-            {loading ? "Comprobando..." : bloqueado ? `Pausado (${lockSecondsRemaining}s)` : "Iniciar Sesión"}
+            {loading 
+              ? "Comprobando..." 
+              : bloqueado 
+              ? `Pausado (${formatearTiempo(lockSecondsRemaining)})` 
+              : "Iniciar Sesión"}
           </button>
         </form>
 
