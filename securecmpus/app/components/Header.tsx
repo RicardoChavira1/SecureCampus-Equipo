@@ -31,7 +31,7 @@ export default function Header() {
   const [menuAbierto, setMenuAbierto] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // Escuchar sesión en tiempo real contra Firebase Auth + Firestore
+  // Escucha de sesión en tiempo real contra Firebase Auth + Firestore
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!user) {
@@ -71,7 +71,7 @@ export default function Header() {
     return () => unsubscribe();
   }, []);
 
-  // Cerrar el menú desplegable si se hace clic fuera
+  // Cierre del dropdown al hacer clic afuera
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
@@ -95,7 +95,7 @@ export default function Header() {
     <header className="w-full bg-slate-900/90 backdrop-blur-md border-b border-slate-800 text-white sticky top-0 z-50 shadow-lg">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         
-        {/* Logo Institucional */}
+        {/* Logotipo Institucional */}
         <div className="flex items-center gap-3">
           <Link href="/" className="flex items-center gap-2.5 group">
             <div className="w-9 h-9 bg-blue-600 border border-blue-400/30 rounded-xl flex items-center justify-center font-black text-white text-base shadow-inner group-hover:bg-blue-500 transition-colors">
@@ -106,28 +106,34 @@ export default function Header() {
                 SecureCampus
               </span>
               <span className="hidden sm:inline-flex items-center gap-1 text-[10px] font-mono uppercase bg-blue-950/80 text-blue-300 border border-blue-800/60 px-2 py-0.5 rounded-full font-semibold">
-                <ShieldCheck className="w-3 h-3 text-blue-400" /> SDLC Seguro
+                <ShieldCheck className="w-3.5 h-3.5 text-blue-400" /> SDLC Seguro
               </span>
             </div>
           </Link>
         </div>
 
-        {/* Navegación y Acciones */}
+        {/* Barra de Navegación por Rol */}
         <nav className="flex items-center gap-4 text-xs font-semibold">
           
-          {/* Enlaces exclusivos para ESTUDIANTE */}
+          {/* Navegación del Rol ESTUDIANTE (Incluye Kárdex y Documentos) */}
           {rolActivo === "ESTUDIANTE" && (
             <div className="hidden md:flex items-center gap-4 text-slate-300">
               <Link href="/estudiante/calificaciones" className="hover:text-white transition-colors">
                 Calificaciones
               </Link>
+              <Link href="/estudiante/kardex" className="hover:text-white transition-colors text-blue-400 font-bold">
+                Kárdex
+              </Link>
               <Link href="/estudiante/solicitudes" className="hover:text-white transition-colors">
                 Solicitudes
+              </Link>
+              <Link href="/documentos" className="hover:text-white transition-colors">
+                Documentos
               </Link>
             </div>
           )}
 
-          {/* Enlaces exclusivos para PROFESOR */}
+          {/* Navegación del Rol PROFESOR */}
           {rolActivo === "PROFESOR" && (
             <div className="hidden md:flex items-center gap-4 text-slate-300">
               <Link href="/profesor/grupos" className="hover:text-white transition-colors">
@@ -136,7 +142,7 @@ export default function Header() {
             </div>
           )}
 
-          {/* Enlaces exclusivos para JEFE_CARRERA */}
+          {/* Navegación del Rol JEFE_CARRERA */}
           {rolActivo === "JEFE_CARRERA" && (
             <div className="hidden md:flex items-center gap-4 text-slate-300">
               <Link href="/jefatura/grupos" className="hover:text-white transition-colors">
@@ -145,7 +151,7 @@ export default function Header() {
             </div>
           )}
 
-          {/* Enlace exclusivo para ADMIN */}
+          {/* Navegación del Rol ADMIN */}
           {rolActivo === "ADMIN" && (
             <div className="hidden md:flex items-center gap-3">
               <Link 
@@ -163,11 +169,10 @@ export default function Header() {
             </div>
           )}
 
-          {/* Estado de Autenticación */}
+          {/* Estado de la Sesión / Botón o Dropdown */}
           {loading ? (
             <div className="w-24 h-8 bg-slate-800/60 rounded-xl animate-pulse" />
           ) : currentUser && perfil ? (
-            /* Usuario con sesión iniciada: Menú desplegable elegante */
             <div className="relative" ref={menuRef}>
               <button
                 type="button"
@@ -188,7 +193,7 @@ export default function Header() {
                 <ChevronDown className="w-3.5 h-3.5 text-slate-400 ml-0.5" />
               </button>
 
-              {/* Menú Flotante */}
+              {/* Menú Desplegable */}
               {menuAbierto && (
                 <div className="absolute right-0 mt-2 w-52 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl py-2 z-50 backdrop-blur-xl animate-in fade-in slide-in-from-top-1">
                   <div className="px-3.5 py-2 border-b border-slate-800/80 mb-1">
@@ -230,7 +235,6 @@ export default function Header() {
               )}
             </div>
           ) : (
-            /* Sin sesión iniciada: Botón limpio de Acceso */
             <Link
               href="/login"
               className="inline-flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs px-4 py-2 rounded-xl font-bold transition-all shadow-md shadow-blue-600/20"
