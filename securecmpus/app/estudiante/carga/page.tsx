@@ -10,9 +10,9 @@ import {
   doc,
   getDoc,
   getDocs,
+  query,
   runTransaction,
   serverTimestamp,
-  query,
   where,
 } from "firebase/firestore";
 import { auth, db } from "../../../lib/firebase";
@@ -44,15 +44,23 @@ interface Inscripcion {
   grupoId: string;
 }
 
+type RolPermitido = "ESTUDIANTE" | "ADMIN";
+
 export default function CargaAcademicaPage() {
   const router = useRouter();
+
   const [user, setUser] = useState<User | null>(null);
+  const [rolActual, setRolActual] = useState<RolPermitido>("ESTUDIANTE");
+
   const [grupos, setGrupos] = useState<Grupo[]>([]);
   const [inscripciones, setInscripciones] = useState<Inscripcion[]>([]);
+
   const [loading, setLoading] = useState(true);
   const [procesandoId, setProcesandoId] = useState<string | null>(null);
+
   const [errorMsg, setErrorMsg] = useState("");
   const [noticia, setNoticia] = useState("");
+  const [accesoDenegado, setAccesoDenegado] = useState(false);
 
   const gruposInscritos = useMemo(
     () => new Set(inscripciones.map((i) => i.grupoId)),
@@ -62,96 +70,144 @@ export default function CargaAcademicaPage() {
   const cargarDatos = async (uid: string) => {
     const [gruposSnap, inscripcionesSnap, profesoresSnap] = await Promise.all([
       getDocs(collection(db, "grupos")),
+
       getDocs(
         query(
           collection(db, "inscripciones"),
           where("alumnoUid", "==", uid)
         )
       ),
-      getDocs(query(collection(db, "usuarios"), where("rol", "==", "PROFESOR"))),
+
+      getDocs(
+        query(
+          collection(db, "usuarios"),
+          where("rol", "==", "PROFESOR")
+        )
+      ),
     ]);
 
     const profesores = new Map<string, string>();
+
     profesoresSnap.forEach((d) => {
-      profesores.set(d.id, d.data().nombre || d.data().correo || "Docente");
+      const data = d.data();
+
+      if (data.activo !== false) {
+        profesores.set(
+          d.id,
+          data.nombre || data.correo || "Docente"
+        );
+      }
     });
 
     const listaGrupos: Grupo[] = gruposSnap.docs.map((d) => {
       const data = d.data();
+
       return {
         id: d.id,
         claveMateria: data.claveMateria || "",
         nombreMateria: data.nombreMateria || "",
         periodo: data.periodo || "",
         profesorUid: data.profesorUid || "",
-        profesorNombre: profesores.get(data.profesorUid) || "Sin asignar",
+        profesorNombre:
+          profesores.get(data.profesorUid) || "Sin asignar",
         cupoMaximo: Number(data.cupoMaximo || 0),
-        inscritosActuales: Number(data.inscritosActuales || 0),
+        inscritosActuales: Math.max(
+          0,
+          Number(data.inscritosActuales || 0)
+        ),
         horario: data.horario || "POR DEFINIR",
       };
     });
 
-    const listaInscripciones: Inscripcion[] = inscripcionesSnap.docs.map((d) => ({
-      id: d.id,
-      grupoId: d.data().grupoId,
-    }));
+    const listaInscripciones: Inscripcion[] =
+      inscripcionesSnap.docs.map((d) => ({
+        id: d.id,
+        grupoId: d.data().grupoId || "",
+      }));
 
     setGrupos(listaGrupos);
     setInscripciones(listaInscripciones);
   };
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      if (!currentUser) {
-        router.push("/login");
-        return;
-      }
-
-      setUser(currentUser);
-
-      try {
-        const usuarioSnap = await getDoc(doc(db, "usuarios", currentUser.uid));
-
-        if (
-          !usuarioSnap.exists() ||
-          (usuarioSnap.data().rol !== "ESTUDIANTE" &&
-            usuarioSnap.data().rol !== "ADMIN")
-        ) {
-          setErrorMsg(
-            "Acceso restringido: esta vista es exclusiva para estudiantes."
-          );
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      async (currentUser) => {
+        if (!currentUser) {
+          router.push("/login");
           return;
         }
 
-        await cargarDatos(currentUser.uid);
-      } catch {
-        setErrorMsg("No se pudo cargar la oferta académica.");
-      } finally {
-        setLoading(false);
+        setUser(currentUser);
+
+        try {
+          const usuarioSnap = await getDoc(
+            doc(db, "usuarios", currentUser.uid)
+          );
+
+          if (!usuarioSnap.exists()) {
+            setAccesoDenegado(true);
+            setErrorMsg(
+              "No existe un perfil autorizado asociado a esta cuenta."
+            );
+            return;
+          }
+
+          const rol = usuarioSnap.data().rol;
+
+          if (rol !== "ESTUDIANTE" && rol !== "ADMIN") {
+            setAccesoDenegado(true);
+            setErrorMsg(
+              "Acceso restringido: esta vista es exclusiva para estudiantes."
+            );
+            return;
+          }
+
+          setRolActual(rol);
+          setAccesoDenegado(false);
+
+          await cargarDatos(currentUser.uid);
+        } catch {
+          setErrorMsg(
+            "No se pudo cargar la oferta académica."
+          );
+        } finally {
+          setLoading(false);
+        }
       }
-    });
+    );
 
     return () => unsubscribe();
   }, [router]);
 
-  const registrarAuditoria = async (accion: string, recurso: string) => {
+  const registrarAuditoria = async (
+    accion: string,
+    recurso: string
+  ) => {
     if (!user) return;
+
     try {
       await addDoc(collection(db, "auditoria_logs"), {
         usuarioUid: user.uid,
-        rol: "ESTUDIANTE",
+        rol: rolActual,
         accion,
         recurso,
         ip: "CLIENTE_WEB",
         timestamp: serverTimestamp(),
       });
     } catch {
-      // La auditoría no debe bloquear la operación principal.
+      // La auditoría no debe impedir que termine
+      // la operación principal.
     }
   };
 
   const inscribirse = async (grupo: Grupo) => {
-    if (!user || gruposInscritos.has(grupo.id)) return;
+    if (!user) return;
+
+    if (gruposInscritos.has(grupo.id)) {
+      setErrorMsg("Ya estás inscrito en este grupo.");
+      return;
+    }
 
     setProcesandoId(grupo.id);
     setErrorMsg("");
@@ -160,36 +216,59 @@ export default function CargaAcademicaPage() {
     try {
       const grupoRef = doc(db, "grupos", grupo.id);
 
+      /*
+       * El ID se genera a partir del alumno y del grupo.
+       * Esto evita crear dos documentos diferentes para
+       * la misma inscripción.
+       */
+      const inscripcionId = `${user.uid}_${grupo.id}`;
+
+      const inscripcionRef = doc(
+        db,
+        "inscripciones",
+        inscripcionId
+      );
+
       await runTransaction(db, async (transaction) => {
+        /*
+         * IMPORTANTE:
+         * Todas las lecturas de la transacción se realizan
+         * antes de efectuar escrituras.
+         */
+
         const grupoSnap = await transaction.get(grupoRef);
+        const inscripcionSnap =
+          await transaction.get(inscripcionRef);
 
         if (!grupoSnap.exists()) {
           throw new Error("GRUPO_NO_EXISTE");
         }
 
-        const data = grupoSnap.data();
-        const cupoMaximo = Number(data.cupoMaximo || 0);
-        const inscritosActuales = Number(data.inscritosActuales || 0);
+        if (inscripcionSnap.exists()) {
+          throw new Error("DUPLICADA");
+        }
+
+        const dataGrupo = grupoSnap.data();
+
+        const cupoMaximo = Number(
+          dataGrupo.cupoMaximo || 0
+        );
+
+        const inscritosActuales = Math.max(
+          0,
+          Number(dataGrupo.inscritosActuales || 0)
+        );
+
+        if (cupoMaximo <= 0) {
+          throw new Error("CUPO_INVALIDO");
+        }
 
         if (inscritosActuales >= cupoMaximo) {
           throw new Error("SIN_CUPO");
         }
 
-        const propiaSnap = await getDocs(
-          query(
-            collection(db, "inscripciones"),
-            where("alumnoUid", "==", user.uid),
-            where("grupoId", "==", grupo.id)
-          )
-        );
-
-        if (!propiaSnap.empty) {
-          throw new Error("DUPLICADA");
-        }
-
-        const nuevaInscripcion = doc(collection(db, "inscripciones"));
-        transaction.set(nuevaInscripcion, {
-          inscripcionId: nuevaInscripcion.id,
+        transaction.set(inscripcionRef, {
+          inscripcionId,
           grupoId: grupo.id,
           alumnoUid: user.uid,
           inscritoPor: user.uid,
@@ -201,23 +280,45 @@ export default function CargaAcademicaPage() {
         });
       });
 
-      await registrarAuditoria("INSCRIBIR_GRUPO", `grupos/${grupo.id}`);
-      setNoticia(`Te inscribiste correctamente a ${grupo.nombreMateria}.`);
+      await registrarAuditoria(
+        "INSCRIBIR_GRUPO",
+        `grupos/${grupo.id}`
+      );
+
+      setNoticia(
+        `Te inscribiste correctamente a ${grupo.nombreMateria}.`
+      );
+
       await cargarDatos(user.uid);
     } catch (err) {
-      const mensaje =
-        err instanceof Error && err.message === "SIN_CUPO"
-          ? "El grupo ya no tiene lugares disponibles."
-          : err instanceof Error && err.message === "DUPLICADA"
-          ? "Ya estás inscrito en este grupo."
-          : "No se pudo completar la inscripción.";
+      let mensaje =
+        "No se pudo completar la inscripción.";
+
+      if (err instanceof Error) {
+        if (err.message === "SIN_CUPO") {
+          mensaje =
+            "El grupo ya no tiene lugares disponibles.";
+        } else if (err.message === "DUPLICADA") {
+          mensaje =
+            "Ya estás inscrito en este grupo.";
+        } else if (err.message === "GRUPO_NO_EXISTE") {
+          mensaje =
+            "El grupo seleccionado ya no existe.";
+        } else if (err.message === "CUPO_INVALIDO") {
+          mensaje =
+            "El grupo no tiene un cupo válido configurado.";
+        }
+      }
+
       setErrorMsg(mensaje);
     } finally {
       setProcesandoId(null);
     }
   };
 
-  const darDeBaja = async (inscripcion: Inscripcion) => {
+  const darDeBaja = async (
+    inscripcion: Inscripcion
+  ) => {
     if (!user) return;
 
     setProcesandoId(inscripcion.grupoId);
@@ -225,29 +326,56 @@ export default function CargaAcademicaPage() {
     setNoticia("");
 
     try {
-      const inscripcionRef = doc(db, "inscripciones", inscripcion.id);
-      const inscripcionSnap = await getDoc(inscripcionRef);
+      const inscripcionRef = doc(
+        db,
+        "inscripciones",
+        inscripcion.id
+      );
 
-      if (
-        !inscripcionSnap.exists() ||
-        inscripcionSnap.data().alumnoUid !== user.uid
-      ) {
-        throw new Error("NO_AUTORIZADO");
-      }
-
-      const grupoRef = doc(db, "grupos", inscripcion.grupoId);
+      const grupoRef = doc(
+        db,
+        "grupos",
+        inscripcion.grupoId
+      );
 
       await runTransaction(db, async (transaction) => {
-        const grupoSnap = await transaction.get(grupoRef);
+        /*
+         * La propiedad de la inscripción se comprueba
+         * dentro de la propia transacción.
+         */
+        const inscripcionSnap =
+          await transaction.get(inscripcionRef);
+
+        const grupoSnap =
+          await transaction.get(grupoRef);
+
+        if (!inscripcionSnap.exists()) {
+          throw new Error("INSCRIPCION_NO_EXISTE");
+        }
+
+        if (
+          inscripcionSnap.data().alumnoUid !== user.uid
+        ) {
+          throw new Error("NO_AUTORIZADO");
+        }
+
         const actuales = grupoSnap.exists()
-          ? Number(grupoSnap.data().inscritosActuales || 0)
+          ? Math.max(
+              0,
+              Number(
+                grupoSnap.data().inscritosActuales || 0
+              )
+            )
           : 0;
 
         transaction.delete(inscripcionRef);
 
         if (grupoSnap.exists()) {
           transaction.update(grupoRef, {
-            inscritosActuales: Math.max(0, actuales - 1),
+            inscritosActuales: Math.max(
+              0,
+              actuales - 1
+            ),
           });
         }
       });
@@ -256,10 +384,32 @@ export default function CargaAcademicaPage() {
         "BAJA_GRUPO",
         `inscripciones/${inscripcion.id}`
       );
-      setNoticia("La materia fue retirada de tu carga académica.");
+
+      setNoticia(
+        "La materia fue retirada de tu carga académica."
+      );
+
       await cargarDatos(user.uid);
-    } catch {
-      setErrorMsg("No se pudo dar de baja la materia.");
+    } catch (err) {
+      if (
+        err instanceof Error &&
+        err.message === "NO_AUTORIZADO"
+      ) {
+        setErrorMsg(
+          "No tienes autorización para modificar esta inscripción."
+        );
+      } else if (
+        err instanceof Error &&
+        err.message === "INSCRIPCION_NO_EXISTE"
+      ) {
+        setErrorMsg(
+          "La inscripción ya no existe."
+        );
+      } else {
+        setErrorMsg(
+          "No se pudo dar de baja la materia."
+        );
+      }
     } finally {
       setProcesandoId(null);
     }
@@ -269,17 +419,52 @@ export default function CargaAcademicaPage() {
     return (
       <div className="min-h-[calc(100vh-160px)] flex flex-col items-center justify-center gap-4">
         <div className="w-10 h-10 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin" />
-        <p className="text-xs text-slate-400">Cargando oferta académica...</p>
+        <p className="text-xs text-slate-400">
+          Cargando oferta académica...
+        </p>
+      </div>
+    );
+  }
+
+  if (accesoDenegado) {
+    return (
+      <div className="max-w-md mx-auto my-16 p-6 rounded-2xl bg-rose-950/30 border border-rose-500/30 text-center space-y-4">
+        <AlertCircle className="w-12 h-12 text-rose-400 mx-auto" />
+
+        <h2 className="text-lg font-bold text-white">
+          Acceso Denegado
+        </h2>
+
+        <p className="text-xs text-rose-300">
+          {errorMsg}
+        </p>
+
+        <Link
+          href="/perfil"
+          className="inline-block px-4 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-slate-300 hover:text-white"
+        >
+          Volver a mi Perfil
+        </Link>
       </div>
     );
   }
 
   const cargaActual = inscripciones
-    .map((ins) => ({
-      inscripcion: ins,
-      grupo: grupos.find((g) => g.id === ins.grupoId),
+    .map((inscripcion) => ({
+      inscripcion,
+      grupo: grupos.find(
+        (grupo) =>
+          grupo.id === inscripcion.grupoId
+      ),
     }))
-    .filter((x) => x.grupo);
+    .filter(
+      (
+        item
+      ): item is {
+        inscripcion: Inscripcion;
+        grupo: Grupo;
+      } => item.grupo !== undefined
+    );
 
   return (
     <div className="space-y-6 py-6 max-w-7xl mx-auto px-4">
@@ -289,11 +474,14 @@ export default function CargaAcademicaPage() {
             <ShieldCheck className="w-3.5 h-3.5" />
             Portal del Estudiante · Reinscripción
           </div>
+
           <h1 className="text-3xl font-black text-white tracking-tight">
             Carga Académica
           </h1>
+
           <p className="text-xs text-slate-400">
-            Consulta grupos disponibles y administra tu carga del periodo.
+            Consulta grupos disponibles y administra tu
+            carga del periodo.
           </p>
         </div>
 
@@ -305,6 +493,7 @@ export default function CargaAcademicaPage() {
             <ArrowLeft className="w-3.5 h-3.5" />
             Mi Perfil
           </Link>
+
           <button
             onClick={async () => {
               await signOut(auth);
@@ -335,7 +524,10 @@ export default function CargaAcademicaPage() {
       <section className="space-y-3">
         <div className="flex items-center gap-2">
           <BookOpen className="w-5 h-5 text-blue-400" />
-          <h2 className="text-lg font-bold text-white">Mi carga actual</h2>
+
+          <h2 className="text-lg font-bold text-white">
+            Mi carga actual
+          </h2>
         </div>
 
         <div className="rounded-2xl border border-slate-800 bg-slate-900/60 overflow-hidden">
@@ -343,43 +535,89 @@ export default function CargaAcademicaPage() {
             <table className="w-full text-left text-xs text-slate-300">
               <thead className="bg-slate-950/80 text-slate-400 uppercase font-mono text-[11px]">
                 <tr>
-                  <th className="px-4 py-3">Clave</th>
-                  <th className="px-4 py-3">Materia</th>
-                  <th className="px-4 py-3">Profesor</th>
-                  <th className="px-4 py-3">Horario</th>
-                  <th className="px-4 py-3">Periodo</th>
-                  <th className="px-4 py-3 text-center">Acción</th>
+                  <th className="px-4 py-3">
+                    Clave
+                  </th>
+
+                  <th className="px-4 py-3">
+                    Materia
+                  </th>
+
+                  <th className="px-4 py-3">
+                    Profesor
+                  </th>
+
+                  <th className="px-4 py-3">
+                    Horario
+                  </th>
+
+                  <th className="px-4 py-3">
+                    Periodo
+                  </th>
+
+                  <th className="px-4 py-3 text-center">
+                    Acción
+                  </th>
                 </tr>
               </thead>
+
               <tbody className="divide-y divide-slate-800/60">
                 {cargaActual.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                    <td
+                      colSpan={6}
+                      className="px-4 py-8 text-center text-slate-500"
+                    >
                       Aún no tienes materias inscritas.
                     </td>
                   </tr>
                 ) : (
-                  cargaActual.map(({ inscripcion, grupo }) => (
-                    <tr key={inscripcion.id} className="hover:bg-slate-800/30">
-                      <td className="px-4 py-3 font-mono font-bold text-white">
-                        {grupo!.claveMateria}
-                      </td>
-                      <td className="px-4 py-3">{grupo!.nombreMateria}</td>
-                      <td className="px-4 py-3">{grupo!.profesorNombre}</td>
-                      <td className="px-4 py-3">{grupo!.horario}</td>
-                      <td className="px-4 py-3">{grupo!.periodo}</td>
-                      <td className="px-4 py-3 text-center">
-                        <button
-                          onClick={() => darDeBaja(inscripcion)}
-                          disabled={procesandoId === grupo!.id}
-                          className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg font-semibold disabled:opacity-50 inline-flex items-center gap-1"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          Dar de baja
-                        </button>
-                      </td>
-                    </tr>
-                  ))
+                  cargaActual.map(
+                    ({ inscripcion, grupo }) => (
+                      <tr
+                        key={inscripcion.id}
+                        className="hover:bg-slate-800/30"
+                      >
+                        <td className="px-4 py-3 font-mono font-bold text-white">
+                          {grupo.claveMateria}
+                        </td>
+
+                        <td className="px-4 py-3">
+                          {grupo.nombreMateria}
+                        </td>
+
+                        <td className="px-4 py-3">
+                          {grupo.profesorNombre}
+                        </td>
+
+                        <td className="px-4 py-3">
+                          {grupo.horario}
+                        </td>
+
+                        <td className="px-4 py-3">
+                          {grupo.periodo}
+                        </td>
+
+                        <td className="px-4 py-3 text-center">
+                          <button
+                            onClick={() =>
+                              darDeBaja(
+                                inscripcion
+                              )
+                            }
+                            disabled={
+                              procesandoId ===
+                              grupo.id
+                            }
+                            className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg font-semibold disabled:opacity-50 inline-flex items-center gap-1"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            Dar de baja
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  )
                 )}
               </tbody>
             </table>
@@ -390,60 +628,92 @@ export default function CargaAcademicaPage() {
       <section className="space-y-3">
         <div className="flex items-center gap-2">
           <UserPlus className="w-5 h-5 text-blue-400" />
-          <h2 className="text-lg font-bold text-white">Grupos disponibles</h2>
+
+          <h2 className="text-lg font-bold text-white">
+            Grupos disponibles
+          </h2>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {grupos.map((g) => {
-            const inscrito = gruposInscritos.has(g.id);
-            const sinCupo = g.inscritosActuales >= g.cupoMaximo;
+        {grupos.length === 0 ? (
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-8 text-center text-xs text-slate-500">
+            No hay grupos disponibles en este momento.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {grupos.map((grupo) => {
+              const inscrito =
+                gruposInscritos.has(grupo.id);
 
-            return (
-              <div
-                key={g.id}
-                className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4"
-              >
-                <div>
-                  <div className="text-[11px] font-mono text-blue-400">
-                    {g.claveMateria} · {g.periodo}
-                  </div>
-                  <h3 className="text-lg font-bold text-white">
-                    {g.nombreMateria}
-                  </h3>
-                </div>
+              const sinCupo =
+                grupo.cupoMaximo <= 0 ||
+                grupo.inscritosActuales >=
+                  grupo.cupoMaximo;
 
-                <div className="space-y-1.5 text-xs text-slate-400">
-                  <p>
-                    <strong className="text-slate-300">Profesor:</strong>{" "}
-                    {g.profesorNombre}
-                  </p>
-                  <p>
-                    <strong className="text-slate-300">Horario:</strong>{" "}
-                    {g.horario}
-                  </p>
-                  <p>
-                    <strong className="text-slate-300">Cupo:</strong>{" "}
-                    {g.inscritosActuales}/{g.cupoMaximo}
-                  </p>
-                </div>
-
-                <button
-                  onClick={() => inscribirse(g)}
-                  disabled={inscrito || sinCupo || procesandoId === g.id}
-                  className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed"
+              return (
+                <div
+                  key={grupo.id}
+                  className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4"
                 >
-                  {inscrito
-                    ? "Ya inscrito"
-                    : sinCupo
-                    ? "Sin cupo"
-                    : procesandoId === g.id
-                    ? "Procesando..."
-                    : "Inscribirme"}
-                </button>
-              </div>
-            );
-          })}
-        </div>
+                  <div>
+                    <div className="text-[11px] font-mono text-blue-400">
+                      {grupo.claveMateria} ·{" "}
+                      {grupo.periodo}
+                    </div>
+
+                    <h3 className="text-lg font-bold text-white">
+                      {grupo.nombreMateria}
+                    </h3>
+                  </div>
+
+                  <div className="space-y-1.5 text-xs text-slate-400">
+                    <p>
+                      <strong className="text-slate-300">
+                        Profesor:
+                      </strong>{" "}
+                      {grupo.profesorNombre}
+                    </p>
+
+                    <p>
+                      <strong className="text-slate-300">
+                        Horario:
+                      </strong>{" "}
+                      {grupo.horario}
+                    </p>
+
+                    <p>
+                      <strong className="text-slate-300">
+                        Cupo:
+                      </strong>{" "}
+                      {grupo.inscritosActuales}/
+                      {grupo.cupoMaximo}
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() =>
+                      inscribirse(grupo)
+                    }
+                    disabled={
+                      inscrito ||
+                      sinCupo ||
+                      procesandoId === grupo.id
+                    }
+                    className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed"
+                  >
+                    {inscrito
+                      ? "Ya inscrito"
+                      : sinCupo
+                        ? "Sin cupo"
+                        : procesandoId ===
+                            grupo.id
+                          ? "Procesando..."
+                          : "Inscribirme"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </section>
     </div>
   );
