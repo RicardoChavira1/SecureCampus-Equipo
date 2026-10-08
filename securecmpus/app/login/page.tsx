@@ -8,7 +8,16 @@ import {
   signOut, 
   sendEmailVerification 
 } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import { 
+  doc, 
+  getDoc, 
+  collection, 
+  query, 
+  where, 
+  getDocs, 
+  updateDoc, 
+  serverTimestamp 
+} from "firebase/firestore";
 import { auth, db } from "../../lib/firebase";
 import { 
   ShieldCheck, 
@@ -32,7 +41,7 @@ export default function LoginPage() {
   const [unverifiedUser, setUnverifiedUser] = useState<any | null>(null);
   const [resendStatus, setResendStatus] = useState<string | null>(null);
   
-  // Rate Limiting (5 intentos fallidos -> Bloqueo de 15 minutos)
+  // Rate Limiting
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [lockSecondsRemaining, setLockSecondsRemaining] = useState(0);
 
@@ -40,7 +49,7 @@ export default function LoginPage() {
   const MAX_INTENTOS = 5;
   const TIEMPO_BLOQUEO_MS = 15 * 60 * 1000; // 15 minutos
 
-  // Carga y validación del temporizador persistido
+  // Carga y sincronización del bloqueo local
   useEffect(() => {
     const savedLock = localStorage.getItem("sc_login_lock");
     const savedAttempts = localStorage.getItem("sc_login_attempts");
@@ -88,6 +97,25 @@ export default function LoginPage() {
     return `${min}:${seg < 10 ? "0" : ""}${seg}`;
   };
 
+  // Bloquear usuario directamente en la base de datos Firestore
+  const bloquearUsuarioEnFirestore = async (correoObjetivo: string) => {
+    try {
+      const q = query(collection(db, "usuarios"), where("correo", "==", correoObjetivo));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        const userDocRef = doc(db, "usuarios", snap.docs[0].id);
+        await updateDoc(userDocRef, {
+          activo: false,
+          bloqueadoPorSeguridad: true,
+          intentosFallidos: 5,
+          bloqueadoEn: serverTimestamp()
+        });
+      }
+    } catch (error) {
+      console.warn("No se pudo persistir el bloqueo en Firestore:", error);
+    }
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (lockSecondsRemaining > 0) return;
@@ -100,7 +128,6 @@ export default function LoginPage() {
     const correoNormalizado = correo.trim().toLowerCase();
     const esDominioValido = DOMINIOS_VALIDOS.some((d) => correoNormalizado.endsWith(d));
 
-    // Validación perimetral uniforme (OWASP A07)
     if (!esDominioValido) {
       setLoading(false);
       setErrorMsg("Credenciales de acceso inválidas o usuario inactivo.");
@@ -108,10 +135,11 @@ export default function LoginPage() {
     }
 
     try {
+      // 1. Intento de autenticación en Firebase
       const userCredential = await signInWithEmailAndPassword(auth, correoNormalizado, password);
       const user = userCredential.user;
 
-      // Validación en Firestore (RBAC y cuenta activa)
+      // 2. Consulta en Firestore para validar estado
       const userDocRef = doc(db, "usuarios", user.uid);
       const userSnapshot = await getDoc(userDocRef);
 
@@ -124,17 +152,18 @@ export default function LoginPage() {
 
       const userData = userSnapshot.data();
 
-      if (!userData.activo) {
+      // Si el Administrador lo desbloqueó, limpiamos el bloqueo local
+      if (userData.activo) {
+        localStorage.removeItem("sc_login_lock");
+        localStorage.removeItem("sc_login_attempts");
+        setFailedAttempts(0);
+        setLockSecondsRemaining(0);
+      } else {
         await signOut(auth);
-        setErrorMsg("Cuenta suspendida administrativamente o bloqueada por seguridad.");
+        setErrorMsg("Cuenta bloqueada por seguridad. Contacta al Administrador para reactivación inmediata.");
         setLoading(false);
         return;
       }
-
-      // Limpieza de contadores al autenticarse correctamente
-      localStorage.removeItem("sc_login_attempts");
-      localStorage.removeItem("sc_login_lock");
-      setFailedAttempts(0);
 
       // Redirección por Rol
       switch (userData.rol) {
@@ -162,10 +191,13 @@ export default function LoginPage() {
         const lockTime = Date.now() + TIEMPO_BLOQUEO_MS;
         localStorage.setItem("sc_login_lock", lockTime.toString());
         setLockSecondsRemaining(Math.ceil(TIEMPO_BLOQUEO_MS / 1000));
-        setErrorMsg("Has superado el límite de 5 intentos. Acceso pausado por 15 minutos o recupera tu contraseña.");
+        setErrorMsg("Has superado 5 intentos. Acceso pausado por 15 minutos o recupera tu contraseña.");
+        
+        // Impacto real en base de datos para el Dashboard de Admin
+        await bloquearUsuarioEnFirestore(correoNormalizado);
       } else {
         const restantes = MAX_INTENTOS - nextAttempts;
-        setErrorMsg(`Credenciales de acceso inválidas. (${restantes} intento${restantes > 1 ? "s" : ""} restante${restantes > 1 ? "s" : ""})`);
+        setErrorMsg(`Credenciales inválidas. (${restantes} intento${restantes > 1 ? "s" : ""} restante${restantes > 1 ? "s" : ""})`);
       }
     } finally {
       setLoading(false);
@@ -190,7 +222,6 @@ export default function LoginPage() {
 
       <div className="max-w-md w-full space-y-6 bg-slate-900/70 p-8 rounded-2xl border border-slate-800 shadow-2xl backdrop-blur-md">
         
-        {/* Cabecera */}
         <div className="text-center space-y-2">
           <div className="w-12 h-12 bg-blue-600/15 border border-blue-500/30 rounded-xl flex items-center justify-center mx-auto text-blue-400 mb-2 font-mono font-bold text-xl shadow-inner">
             SC
@@ -203,7 +234,6 @@ export default function LoginPage() {
           </p>
         </div>
 
-        {/* Notificación de Error */}
         {errorMsg && (
           <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-start gap-2.5">
             <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
@@ -235,7 +265,6 @@ export default function LoginPage() {
           </div>
         )}
 
-        {/* Notificación de Bloqueo Activo */}
         {bloqueado && (
           <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center justify-between font-mono">
             <div className="flex items-center gap-2">
@@ -246,9 +275,7 @@ export default function LoginPage() {
           </div>
         )}
 
-        {/* Formulario */}
         <form className="space-y-4" onSubmit={handleLogin}>
-          
           <div>
             <label 
               htmlFor="correo" 
