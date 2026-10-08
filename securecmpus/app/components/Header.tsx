@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
 
 // Tipado de roles según el análisis de arquitectura
 export type RolUsuario = "ESTUDIANTE" | "PROFESOR" | "JEFE_CARRERA" | "ADMIN" | null;
@@ -15,8 +14,6 @@ export default function Header({ rolActivo = null, nombreUsuario = "Usuario" }: 
   return (
     <header className="w-full bg-slate-900 border-b border-slate-800 text-white sticky top-0 z-50 shadow-md">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-        
-        {/* Logotipo y Nombre del Sistema */}
         <div className="flex items-center gap-3">
           <Link href="/" className="flex items-center gap-2">
             <div className="w-9 h-9 bg-blue-700 rounded-lg flex items-center justify-center font-bold text-white text-lg shadow">
@@ -31,12 +28,14 @@ export default function Header({ rolActivo = null, nombreUsuario = "Usuario" }: 
           </Link>
         </div>
 
-        {/* Navegación Condicional según el Rol */}
         <nav className="flex items-center gap-4 text-sm font-medium">
           {rolActivo === "ESTUDIANTE" && (
             <>
               <Link href="/estudiante/calificaciones" className="text-slate-300 hover:text-white transition">
                 Calificaciones
+              </Link>
+              <Link href="/estudiante/carga" className="text-slate-300 hover:text-white transition">
+                Carga
               </Link>
               <Link href="/estudiante/solicitudes" className="text-slate-300 hover:text-white transition">
                 Solicitudes
@@ -78,7 +77,6 @@ export default function Header({ rolActivo = null, nombreUsuario = "Usuario" }: 
             </Link>
           )}
 
-          {/* Menú de Usuario / Sesión */}
           {rolActivo ? (
             <div className="flex items-center gap-3 pl-4 border-l border-slate-800">
               <Link
