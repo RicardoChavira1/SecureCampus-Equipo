@@ -28,7 +28,7 @@ import {
   EyeOff, 
   AlertCircle, 
   Clock, 
-  Send,
+  Send, 
   KeyRound,
   CheckCircle2
 } from "lucide-react";
@@ -52,11 +52,26 @@ export default function LoginPage() {
   const MAX_INTENTOS = 5;
   const TIEMPO_BLOQUEO_MS = 15 * 60 * 1000; // 15 minutos
 
-  // 1. Sincronización inicial del temporizador local
+  // Limpieza total del bloqueo en cliente
+  const limpiarBloqueoLocal = () => {
+    localStorage.removeItem("sc_login_lock");
+    localStorage.removeItem("sc_login_attempts");
+    localStorage.removeItem("sc_blocked_email");
+    setFailedAttempts(0);
+    setLockSecondsRemaining(0);
+    setErrorMsg("");
+  };
+
+  // 1. Sincronización inicial del temporizador persistido
   useEffect(() => {
     const savedLock = localStorage.getItem("sc_login_lock");
     const savedAttempts = localStorage.getItem("sc_login_attempts");
+    const savedEmail = localStorage.getItem("sc_blocked_email");
     
+    if (savedEmail && !correo) {
+      setCorreo(savedEmail);
+    }
+
     if (savedAttempts) {
       setFailedAttempts(parseInt(savedAttempts, 10));
     }
@@ -72,41 +87,7 @@ export default function LoginPage() {
     }
   }, []);
 
-  // 2. Limpieza de almacenamiento local
-  const limpiarBloqueoLocal = () => {
-    localStorage.removeItem("sc_login_lock");
-    localStorage.removeItem("sc_login_attempts");
-    setFailedAttempts(0);
-    setLockSecondsRemaining(0);
-    setErrorMsg("");
-  };
-
-  // 3. Listener en Tiempo Real: si el Admin desbloquea en Firestore, se libera aquí
-  useEffect(() => {
-    const correoNormalizado = correo.trim().toLowerCase();
-    if (!correoNormalizado || !DOMINIOS_VALIDOS.some((d) => correoNormalizado.endsWith(d))) {
-      return;
-    }
-
-    // Consulta en tiempo real por el correo del usuario
-    const q = query(collection(db, "usuarios"), where("correo", "==", correoNormalizado));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      if (!snapshot.empty) {
-        const data = snapshot.docs[0].data();
-        // Si el admin restauró activo: true y bloqueadoPorSeguridad: false
-        if (data.activo === true && !data.bloqueadoPorSeguridad) {
-          if (lockSecondsRemaining > 0 || failedAttempts >= MAX_INTENTOS) {
-            limpiarBloqueoLocal();
-            setNoticiaExito("Tu cuenta ha sido desbloqueada por el Administrador. Ya puedes acceder.");
-          }
-        }
-      }
-    });
-
-    return () => unsubscribe();
-  }, [correo, lockSecondsRemaining, failedAttempts]);
-
-  // 4. Temporizador regresivo
+  // 2. Temporizador regresivo local
   useEffect(() => {
     if (lockSecondsRemaining <= 0) return;
 
@@ -123,13 +104,56 @@ export default function LoginPage() {
     return () => clearInterval(timer);
   }, [lockSecondsRemaining]);
 
+  // 3. Listener Reactivo en Tiempo Real con Firestore (Crucial para desbloquear entre navegadores)
+  useEffect(() => {
+    const correoObjetivo = (correo || localStorage.getItem("sc_blocked_email") || "").trim().toLowerCase();
+    if (!correoObjetivo || !DOMINIOS_VALIDOS.some((d) => correoObjetivo.endsWith(d))) {
+      return;
+    }
+
+    const q = query(collection(db, "usuarios"), where("correo", "==", correoObjetivo));
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
+      if (!snapshot.empty) {
+        const userDoc = snapshot.docs[0];
+        const data = userDoc.data();
+        const ahora = Date.now();
+        const fechaBloqueo = data.bloqueadoEn?.toMillis ? data.bloqueadoEn.toMillis() : 0;
+
+        // Caso A: Ya pasaron los 15 minutos reales en Firestore -> Auto-desbloqueo
+        if (data.bloqueadoPorSeguridad && fechaBloqueo > 0 && (ahora - fechaBloqueo) >= TIEMPO_BLOQUEO_MS) {
+          try {
+            await updateDoc(doc(db, "usuarios", userDoc.id), {
+              activo: true,
+              bloqueadoPorSeguridad: false,
+              intentosFallidos: 0,
+              desbloqueadoEn: serverTimestamp()
+            });
+          } catch (e) {
+            console.warn("Auto-desbloqueo diferido:", e);
+          }
+          limpiarBloqueoLocal();
+          setNoticiaExito("El periodo de 15 minutos concluyó. Tu cuenta fue restablecida.");
+          return;
+        }
+
+        // Caso B: El Admin lo desbloqueó en Firestore (activo === true && !bloqueadoPorSeguridad)
+        if (data.activo === true && !data.bloqueadoPorSeguridad) {
+          limpiarBloqueoLocal();
+          setNoticiaExito("Tu cuenta fue desbloqueada por el Administrador. Ya puedes acceder.");
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, [correo, lockSecondsRemaining]);
+
   const formatearTiempo = (segundosTotales: number) => {
     const min = Math.floor(segundosTotales / 60);
     const seg = segundosTotales % 60;
     return `${min}:${seg < 10 ? "0" : ""}${seg}`;
   };
 
-  // 5. Asentar bloqueo preventivo directamente en Firestore
+  // 4. Asentar bloqueo preventivo directo en Firestore
   const bloquearUsuarioEnFirestore = async (correoObjetivo: string) => {
     try {
       const q = query(collection(db, "usuarios"), where("correo", "==", correoObjetivo));
@@ -144,7 +168,7 @@ export default function LoginPage() {
         });
       }
     } catch (error) {
-      console.warn("No se pudo persistir el bloqueo en Firestore:", error);
+      console.warn("No se pudo asentar el bloqueo en Firestore:", error);
     }
   };
 
@@ -168,9 +192,11 @@ export default function LoginPage() {
     }
 
     try {
+      // 1. Autenticación en Firebase Auth
       const userCredential = await signInWithEmailAndPassword(auth, correoNormalizado, password);
       const user = userCredential.user;
 
+      // 2. Comprobación en Firestore
       const userDocRef = doc(db, "usuarios", user.uid);
       const userSnapshot = await getDoc(userDocRef);
 
@@ -182,9 +208,24 @@ export default function LoginPage() {
       }
 
       const userData = userSnapshot.data();
+      const ahora = Date.now();
+      const fechaBloqueo = userData.bloqueadoEn?.toMillis ? userData.bloqueadoEn.toMillis() : 0;
 
-      // Validación de cuenta activa
-      if (!userData.activo || userData.bloqueadoPorSeguridad) {
+      // 3. Verificación de expiración de los 15 minutos al loguear
+      if (userData.bloqueadoPorSeguridad && fechaBloqueo > 0 && (ahora - fechaBloqueo) >= TIEMPO_BLOQUEO_MS) {
+        await updateDoc(userDocRef, {
+          activo: true,
+          bloqueadoPorSeguridad: false,
+          intentosFallidos: 0,
+          desbloqueadoEn: serverTimestamp()
+        });
+        userData.activo = true;
+        userData.bloqueadoPorSeguridad = false;
+        limpiarBloqueoLocal();
+      }
+
+      // 4. Validación de cuenta bloqueada
+      if (userData.activo === false || userData.bloqueadoPorSeguridad === true) {
         await signOut(auth);
         setErrorMsg("Cuenta bloqueada por seguridad. Contacta al Administrador para reactivación inmediata.");
         setLoading(false);
@@ -194,7 +235,7 @@ export default function LoginPage() {
       // Éxito: limpiar contadores
       limpiarBloqueoLocal();
 
-      // Redirección por Rol
+      // Redirección por Rol (RBAC)
       switch (userData.rol) {
         case "ESTUDIANTE":
           router.push("/estudiante/calificaciones");
@@ -219,8 +260,9 @@ export default function LoginPage() {
       if (nextAttempts >= MAX_INTENTOS) {
         const lockTime = Date.now() + TIEMPO_BLOQUEO_MS;
         localStorage.setItem("sc_login_lock", lockTime.toString());
+        localStorage.setItem("sc_blocked_email", correoNormalizado); // Guardar correo bloqueado
         setLockSecondsRemaining(Math.ceil(TIEMPO_BLOQUEO_MS / 1000));
-        setErrorMsg("Has superado 5 intentos. Interfaz pausada por 15 minutos o contacta a soporte para reactivación.");
+        setErrorMsg("Has superado 5 intentos. Interfaz pausada por 15 minutos o contacta al Administrador.");
         
         await bloquearUsuarioEnFirestore(correoNormalizado);
       } else {
@@ -262,7 +304,7 @@ export default function LoginPage() {
           </p>
         </div>
 
-        {/* Notificación de éxito si el Admin lo desbloqueó */}
+        {/* Notificación cuando el Admin desbloquea */}
         {noticiaExito && (
           <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
@@ -270,7 +312,7 @@ export default function LoginPage() {
           </div>
         )}
 
-        {/* Mensaje de Error */}
+        {/* Notificación de Error */}
         {errorMsg && (
           <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-start gap-2.5">
             <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
@@ -314,6 +356,7 @@ export default function LoginPage() {
         )}
 
         <form className="space-y-4" onSubmit={handleLogin}>
+          {/* El input de correo NUNCA se deshabilita para que el listener pueda seguir funcionando */}
           <div>
             <label 
               htmlFor="correo" 
@@ -332,7 +375,7 @@ export default function LoginPage() {
                 required
                 value={correo}
                 onChange={(e) => setCorreo(e.target.value)}
-                placeholder="l22280388@toluca.tecnm.mx"
+                placeholder="l22280999@toluca.tecnm.mx"
                 className="appearance-none block w-full pl-9 pr-3.5 py-2.5 bg-slate-950/80 border border-slate-700/80 placeholder-slate-500 text-white rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm transition-all shadow-inner"
               />
             </div>

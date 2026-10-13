@@ -11,6 +11,7 @@ import {
   updateDoc, 
   deleteDoc,
   setDoc,
+  addDoc,
   serverTimestamp 
 } from "firebase/firestore";
 import { auth, db } from "../../../lib/firebase";
@@ -40,6 +41,8 @@ interface UsuarioItem {
   matricula_nomina: string;
   rol: "ESTUDIANTE" | "PROFESOR" | "JEFE_CARRERA" | "ADMIN";
   activo: boolean;
+  bloqueadoPorSeguridad?: boolean;
+  intentosFallidos?: number;
   carrera?: string;
 }
 
@@ -69,10 +72,11 @@ export default function AdminDashboardPage() {
   const [editNombre, setEditNombre] = useState("");
   const [editMatricula, setEditMatricula] = useState("");
 
-  // 1. Verificación RBAC de SysAdmin
+  // 1. Verificación RBAC de SysAdmin sin cuelgues
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!user) {
+        setLoadingAuth(false);
         router.push("/login");
         return;
       }
@@ -82,7 +86,6 @@ export default function AdminDashboardPage() {
         const userDoc = await getDoc(doc(db, "usuarios", user.uid));
         if (userDoc.exists() && userDoc.data().rol === "ADMIN") {
           setEsAdmin(true);
-          await cargarUsuarios();
         } else {
           setEsAdmin(false);
         }
@@ -96,6 +99,13 @@ export default function AdminDashboardPage() {
 
     return () => unsubscribe();
   }, [router]);
+
+  // Carga de usuarios tras confirmar permisos
+  useEffect(() => {
+    if (esAdmin) {
+      cargarUsuarios();
+    }
+  }, [esAdmin]);
 
   // 2. Consulta de Usuarios en Firestore (READ)
   const cargarUsuarios = async () => {
@@ -111,6 +121,8 @@ export default function AdminDashboardPage() {
           matricula_nomina: data.matricula_nomina || "S/N",
           rol: data.rol || "ESTUDIANTE",
           activo: data.activo !== false,
+          bloqueadoPorSeguridad: data.bloqueadoPorSeguridad || false,
+          intentosFallidos: data.intentosFallidos || 0,
           carrera: data.carrera || "",
         };
       });
@@ -137,6 +149,8 @@ export default function AdminDashboardPage() {
         correo: correo.trim().toLowerCase(),
         rol,
         activo: true,
+        bloqueadoPorSeguridad: false,
+        intentosFallidos: 0,
         carrera: "INGENIERÍA EN TECNOLOGÍAS DE LA INFORMACIÓN Y COMUNICACIONES",
         especialidad: rol === "ESTUDIANTE" ? "INGENIERÍA DE DATOS" : "DOCENCIA",
         estatusAcademico: "ACTIVO",
@@ -144,6 +158,21 @@ export default function AdminDashboardPage() {
         creadoEn: serverTimestamp(),
         creadoPor: currentUser?.uid,
       });
+
+      // Emisión de log forense
+      try {
+        await addDoc(collection(db, "auditoria_logs"), {
+          accion: "ALTA_USUARIO",
+          usuarioAfectado: correo.trim().toLowerCase(),
+          ejecutadoPor: currentUser?.email || currentUser?.uid,
+          modulo: "ADMIN_DASHBOARD",
+          severidad: "MEDIA",
+          fecha: serverTimestamp(),
+          detalle: `SysAdmin aprovisionó cuenta ${rol} para ${nombre.trim().toUpperCase()}`
+        });
+      } catch (logErr) {
+        console.warn("Log de auditoría no persistido:", logErr);
+      }
 
       setMensaje({
         tipo: "exito",
@@ -163,26 +192,61 @@ export default function AdminDashboardPage() {
     }
   };
 
-  // 4. Modificación de Estado - Bloquear / Desbloquear (UPDATE)
-  const toggleEstadoUsuario = async (userId: string, estadoActual: boolean) => {
+  // 4. Modificación de Estado y Desbloqueo Real en Firestore (UPDATE / GOBERNANZA)
+  const toggleEstadoUsuario = async (u: UsuarioItem) => {
     try {
-      await updateDoc(doc(db, "usuarios", userId), {
-        activo: !estadoActual,
+      // Si está bloqueado por seguridad o inactivo, se desbloquea; si no, se suspende
+      const estaBloqueado = !u.activo || u.bloqueadoPorSeguridad;
+      const nuevoEstadoActivo = estaBloqueado; // Si estaba bloqueado, pasa a activo (true)
+
+      // Se actualizan obligatoriamente los tres campos en Firestore
+      await updateDoc(doc(db, "usuarios", u.id), {
+        activo: nuevoEstadoActivo,
+        bloqueadoPorSeguridad: !nuevoEstadoActivo,
+        intentosFallidos: nuevoEstadoActivo ? 0 : 5,
+        desbloqueadoEn: nuevoEstadoActivo ? serverTimestamp() : null,
         actualizadoEn: serverTimestamp(),
         actualizadoPor: currentUser?.uid,
       });
 
+      // Emisión del log en auditoria_logs
+      try {
+        await addDoc(collection(db, "auditoria_logs"), {
+          accion: nuevoEstadoActivo ? "DESBLOQUEO_MANUAL_CUENTA" : "BLOQUEO_ADMINISTRATIVO",
+          usuarioAfectado: u.correo,
+          ejecutadoPor: currentUser?.email || currentUser?.uid,
+          modulo: "ADMIN_DASHBOARD",
+          severidad: nuevoEstadoActivo ? "MEDIA" : "ALTA",
+          fecha: serverTimestamp(),
+          detalle: `SysAdmin ${nuevoEstadoActivo ? "desbloqueó y reseteó a 0 los intentos de" : "suspendió"} la cuenta ${u.nombre}`
+        });
+      } catch (logErr) {
+        console.warn("No se pudo registrar log de auditoría:", logErr);
+      }
+
+      // Actualizar estado local reactivo
+      // Actualizar estado local reactivo
       setUsuarios((prev) =>
-        prev.map((u) => (u.id === userId ? { ...u, activo: !estadoActual } : u))
+        prev.map((item): UsuarioItem => {
+          if (item.id !== u.id) return item;
+          return {
+            ...item,
+            activo: Boolean(nuevoEstadoActivo),
+            bloqueadoPorSeguridad: !nuevoEstadoActivo,
+            intentosFallidos: nuevoEstadoActivo ? 0 : 5,
+          };
+        })
       );
 
       setMensaje({
         tipo: "exito",
-        texto: `Usuario ${!estadoActual ? "desbloqueado y reactivado" : "suspendido"} con éxito.`,
+        texto: nuevoEstadoActivo
+          ? `Cuenta de ${u.nombre} desbloqueada en Firestore. Sus parámetros de seguridad volvieron a 0.`
+          : `Cuenta de ${u.nombre} suspendida administrativamente.`,
       });
     } catch (err) {
-      console.error("Error al actualizar estado:", err);
-      setMensaje({ tipo: "error", texto: "Error al modificar el estado del usuario." });
+      console.error("Error al actualizar estado en Firestore:", err);
+      setMensaje({ tipo: "error", texto: "Error al modificar los parámetros en Firestore. Verifica las reglas de seguridad." });
     }
   };
 
@@ -238,7 +302,7 @@ export default function AdminDashboardPage() {
 
   // 7. Eliminar Usuario (DELETE)
   const handleEliminarUsuario = async (u: UsuarioItem) => {
-    const confirmar = window.confirm(`¿Estás seguro de eliminar permanentemente al usuario ${u.nombre}? Esta acción no se puede deshacer.`);
+    const confirmar = window.confirm(`¿Estás seguro de eliminar permanentemente al usuario ${u.nombre}? Esta acción no se puede revertir.`);
     if (!confirmar) return;
 
     try {
@@ -304,7 +368,7 @@ export default function AdminDashboardPage() {
             Gestión Central de Usuarios y Plantillas
           </h1>
           <p className="text-xs text-slate-400">
-            Aprovisionamiento, modificación de privilegios y control de estado de cuentas institucionales.
+            Aprovisionamiento, modificación de privilegios, trazabilidad y reactivación inmediata de cuentas.
           </p>
         </div>
 
@@ -440,7 +504,7 @@ export default function AdminDashboardPage() {
               <h2 className="text-lg font-bold text-white flex items-center gap-2">
                 <Users className="w-5 h-5 text-amber-400" /> Cuentas Institucionales Registradas
               </h2>
-              <p className="text-xs text-slate-400">Control directo de roles, edición de información y desbloqueo de usuarios.</p>
+              <p className="text-xs text-slate-400">Control directo de roles, edición de información y reactivación inmediata de cuentas bloqueadas.</p>
             </div>
 
             <div className="flex items-center gap-2">
@@ -486,74 +550,77 @@ export default function AdminDashboardPage() {
                       </td>
                     </tr>
                   ) : (
-                    usuariosFiltrados.map((u) => (
-                      <tr key={u.id} className="hover:bg-slate-800/40 transition">
-                        <td className="px-4 py-3 font-semibold text-slate-300">{u.matricula_nomina}</td>
-                        <td className="px-4 py-3 font-sans font-bold text-white">{u.nombre}</td>
-                        <td className="px-4 py-3 text-slate-400">{u.correo}</td>
-                        <td className="px-4 py-3">
-                          <select
-                            value={u.rol}
-                            onChange={(e) => cambiarRolUsuario(u.id, e.target.value as any)}
-                            className="bg-slate-950 border border-slate-700 text-slate-200 text-[11px] rounded-lg px-2 py-1 focus:outline-none focus:border-amber-500"
-                          >
-                            <option value="ESTUDIANTE">ESTUDIANTE</option>
-                            <option value="PROFESOR">PROFESOR</option>
-                            <option value="JEFE_CARRERA">JEFE_CARRERA</option>
-                            <option value="ADMIN">ADMIN</option>
-                          </select>
-                        </td>
-                        <td className="px-4 py-3 text-center font-sans">
-                          {u.activo ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-800/60">
-                              Activo
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-950 text-rose-400 border border-rose-800/60">
-                              Bloqueado
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-center font-sans">
-                          <div className="flex items-center justify-center gap-1.5">
-                            {/* Desbloquear / Bloquear */}
-                            <button
-                              onClick={() => toggleEstadoUsuario(u.id, u.activo)}
-                              title={u.activo ? "Bloquear acceso" : "Desbloquear acceso"}
-                              className={`p-1.5 rounded-lg border transition ${
-                                u.activo 
-                                  ? "bg-amber-950/40 border-amber-800/60 text-amber-300 hover:bg-amber-900/60" 
-                                  : "bg-emerald-950/40 border-emerald-800/60 text-emerald-300 hover:bg-emerald-900/60"
-                              }`}
+                    usuariosFiltrados.map((u) => {
+                      const estaBloqueado = !u.activo || u.bloqueadoPorSeguridad;
+                      return (
+                        <tr key={u.id} className="hover:bg-slate-800/40 transition">
+                          <td className="px-4 py-3 font-semibold text-slate-300">{u.matricula_nomina}</td>
+                          <td className="px-4 py-3 font-sans font-bold text-white">{u.nombre}</td>
+                          <td className="px-4 py-3 text-slate-400">{u.correo}</td>
+                          <td className="px-4 py-3">
+                            <select
+                              value={u.rol}
+                              onChange={(e) => cambiarRolUsuario(u.id, e.target.value as any)}
+                              className="bg-slate-950 border border-slate-700 text-slate-200 text-[11px] rounded-lg px-2 py-1 focus:outline-none focus:border-amber-500"
                             >
-                              {u.activo ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
-                            </button>
+                              <option value="ESTUDIANTE">ESTUDIANTE</option>
+                              <option value="PROFESOR">PROFESOR</option>
+                              <option value="JEFE_CARRERA">JEFE_CARRERA</option>
+                              <option value="ADMIN">ADMIN</option>
+                            </select>
+                          </td>
+                          <td className="px-4 py-3 text-center font-sans">
+                            {!estaBloqueado ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-800/60">
+                                Activo
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-950 text-rose-400 border border-rose-800/60">
+                                Bloqueado
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-center font-sans">
+                            <div className="flex items-center justify-center gap-1.5">
+                              {/* Botón de Bloqueo/Desbloqueo completo de Firestore */}
+                              <button
+                                onClick={() => toggleEstadoUsuario(u)}
+                                title={!estaBloqueado ? "Bloquear acceso" : "Desbloquear de inmediato (resetear intentos en Firestore)"}
+                                className={`p-1.5 rounded-lg border transition ${
+                                  !estaBloqueado 
+                                    ? "bg-amber-950/40 border-amber-800/60 text-amber-300 hover:bg-amber-900/60" 
+                                    : "bg-emerald-950/40 border-emerald-800/60 text-emerald-300 hover:bg-emerald-900/60"
+                                }`}
+                              >
+                                {!estaBloqueado ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
+                              </button>
 
-                            {/* Editar */}
-                            <button
-                              onClick={() => {
-                                setUsuarioEditando(u);
-                                setEditNombre(u.nombre);
-                                setEditMatricula(u.matricula_nomina);
-                              }}
-                              title="Editar datos del usuario"
-                              className="p-1.5 rounded-lg bg-blue-950/40 border border-blue-800/60 text-blue-300 hover:bg-blue-900/60 transition"
-                            >
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </button>
+                              {/* Editar */}
+                              <button
+                                onClick={() => {
+                                  setUsuarioEditando(u);
+                                  setEditNombre(u.nombre);
+                                  setEditMatricula(u.matricula_nomina);
+                                }}
+                                title="Editar datos del usuario"
+                                className="p-1.5 rounded-lg bg-blue-950/40 border border-blue-800/60 text-blue-300 hover:bg-blue-900/60 transition"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
 
-                            {/* Eliminar */}
-                            <button
-                              onClick={() => handleEliminarUsuario(u)}
-                              title="Eliminar usuario permanentemente"
-                              className="p-1.5 rounded-lg bg-rose-950/40 border border-rose-800/60 text-rose-300 hover:bg-rose-900/60 transition"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))
+                              {/* Eliminar */}
+                              <button
+                                onClick={() => handleEliminarUsuario(u)}
+                                title="Eliminar usuario permanentemente"
+                                className="p-1.5 rounded-lg bg-rose-950/40 border border-rose-800/60 text-rose-300 hover:bg-rose-900/60 transition"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
                   )}
                 </tbody>
               </table>
