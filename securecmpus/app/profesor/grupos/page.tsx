@@ -4,34 +4,35 @@ import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { onAuthStateChanged, signOut, User } from "firebase/auth";
-import { doc, getDoc, collection, query, getDocs, updateDoc } from "firebase/firestore";
+import { collection, query, where, getDocs, doc, getDoc } from "firebase/firestore";
 import { auth, db } from "../../../lib/firebase";
 import { 
   ShieldCheck, 
   ArrowLeft, 
   LogOut, 
-  Save, 
-  CheckCircle, 
-  AlertCircle,
-  FileEdit
+  Users, 
+  BookOpen, 
+  Clock, 
+  ChevronRight,
+  AlertCircle
 } from "lucide-react";
 
-interface ActaAlumno {
+interface GrupoDocente {
   id: string;
-  alumnoNombre: string;
-  matricula: string;
-  materia: string;
-  unidades: (number | null)[];
-  calificacionFinal: number | null;
+  claveMateria: string;
+  nombreMateria: string;
+  periodo: string;
+  horario: string;
+  cupoMaximo: number;
+  inscritosActuales: number;
+  numeroUnidades: number;
 }
 
 export default function ProfesorGruposPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
-  const [actas, setActas] = useState<ActaAlumno[]>([]);
+  const [grupos, setGrupos] = useState<GrupoDocente[]>([]);
   const [loading, setLoading] = useState(true);
-  const [guardandoId, setGuardandoId] = useState<string | null>(null);
-  const [noticia, setNoticia] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
@@ -50,25 +51,52 @@ export default function ProfesorGruposPage() {
           return;
         }
 
-        // Carga de actas escolares
-        const q = query(collection(db, "calificaciones"));
-        const snap = await getDocs(q);
-        const lista: ActaAlumno[] = [];
-        snap.forEach((d) => {
-          const data = d.data();
-          lista.push({
-            id: d.id,
-            alumnoNombre: data.alumnoNombre || "ESTUDIANTE",
-            matricula: data.matricula || "S/M",
-            materia: data.materia || "DESARROLLO SEGURO",
-            unidades: data.unidades || [null, null, null],
-            calificacionFinal: data.calificacionFinal ?? null,
-          });
+        const esSysAdmin = userDoc.data().rol === "ADMIN";
+
+        // Obtener grupos del docente o todos si es ADMIN
+        const qGrupos = esSysAdmin
+          ? query(collection(db, "grupos"))
+          : query(collection(db, "grupos"), where("profesorUid", "==", currentUser.uid));
+
+        const [gruposSnap, inscripcionesSnap] = await Promise.all([
+          getDocs(qGrupos),
+          getDocs(collection(db, "inscripciones"))
+        ]);
+
+        // Conteo real de inscripciones por grupo
+        const conteoInscripciones = new Map<string, number>();
+        inscripcionesSnap.forEach((insDoc) => {
+          const gId = insDoc.data().grupoId;
+          if (gId) {
+            conteoInconteo(conteoInscripciones, gId);
+          }
         });
 
-        setActas(lista);
+        function conteoInconteo(mapa: Map<string, number>, id: string) {
+          mapa.set(id, (mapa.get(id) || 0) + 1);
+        }
+
+        const lista: GrupoDocente[] = gruposSnap.docs.map((d) => {
+          const data = d.data();
+          const inscritosReales = conteoInscripciones.get(d.id) || 0;
+          const inscritosDoc = Math.max(0, Number(data.inscritosActuales || 0));
+
+          return {
+            id: d.id,
+            claveMateria: data.claveMateria || "S/C",
+            nombreMateria: data.nombreMateria || "Materia sin título",
+            periodo: data.periodo || "2026-2",
+            horario: data.horario || "POR DEFINIR",
+            cupoMaximo: Math.max(0, Number(data.cupoMaximo || 0)),
+            inscritosActuales: Math.max(inscritosDoc, inscritosReales),
+            numeroUnidades: Math.max(1, Number(data.numeroUnidades || 3)),
+          };
+        });
+
+        setGrupos(lista);
       } catch (err) {
-        setErrorMsg("Error al obtener listas docentes.");
+        console.error("Error al cargar grupos del docente:", err);
+        setErrorMsg("Error al sincronizar los grupos asignados.");
       } finally {
         setLoading(false);
       }
@@ -77,43 +105,11 @@ export default function ProfesorGruposPage() {
     return () => unsubscribe();
   }, [router]);
 
-  const handleCalificacionChange = (actaId: string, indexUnidad: number, valor: string) => {
-    const num = valor === "" ? null : Math.min(100, Math.max(0, parseInt(valor, 10) || 0));
-    setActas((prev) =>
-      prev.map((acta) => {
-        if (acta.id !== actaId) return acta;
-        const nuevasUnidades = [...acta.unidades];
-        nuevasUnidades[indexUnidad] = num;
-        return { ...acta, unidades: nuevasUnidades };
-      })
-    );
-  };
-
-  const guardarCalificacion = async (acta: ActaAlumno) => {
-    setGuardandoId(acta.id);
-    setNoticia(null);
-    try {
-      const validas = acta.unidades.filter((u) => u !== null) as number[];
-      const promedio = validas.length > 0 ? Math.round(validas.reduce((a, b) => a + b, 0) / validas.length) : null;
-
-      await updateDoc(doc(db, "calificaciones", acta.id), {
-        unidades: acta.unidades,
-        calificacionFinal: promedio,
-      });
-
-      setNoticia(`Calificaciones de ${acta.alumnoNombre} guardadas con éxito en Firestore.`);
-    } catch (err) {
-      alert("Error al asentar notas en el servidor.");
-    } finally {
-      setGuardandoId(null);
-    }
-  };
-
   if (loading) {
     return (
       <div className="min-h-[calc(100vh-160px)] flex flex-col items-center justify-center space-y-4">
         <div className="w-10 h-10 border-4 border-emerald-500/20 border-t-emerald-500 rounded-full animate-spin" />
-        <p className="text-slate-400 text-xs font-mono">Cargando listas de evaluación...</p>
+        <p className="text-slate-400 text-xs font-mono">Cargando grupos académicos...</p>
       </div>
     );
   }
@@ -132,19 +128,19 @@ export default function ProfesorGruposPage() {
   }
 
   return (
-    <div className="space-y-6 py-6 max-w-6xl mx-auto px-4">
-      {/* Encabezado Docente */}
+    <div className="space-y-6 py-6 max-w-7xl mx-auto px-4">
+      {/* Encabezado */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-800 pb-5">
         <div>
           <div className="inline-flex items-center gap-2 bg-emerald-950/70 border border-emerald-800/60 px-3 py-1 rounded-full text-[11px] font-semibold text-emerald-300 mb-2">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Portal Docente · Captura Oficial de Actas</span>
+            <span>Portal Docente · Asignación Académica</span>
           </div>
           <h1 className="text-3xl font-black text-white tracking-tight">
             Grupos Académicos Asignados
           </h1>
           <p className="text-xs text-slate-400">
-            Ingreso y asentamiento directo de calificaciones para alumnos matriculados
+            Selecciona un grupo para capturar y asentar las calificaciones oficiales
           </p>
         </div>
 
@@ -157,7 +153,7 @@ export default function ProfesorGruposPage() {
             <span>Mi Perfil</span>
           </Link>
           <button
-            onClick={() => { signOut(auth); router.push("/login"); }}
+            onClick={async () => { await signOut(auth); router.push("/login"); }}
             className="p-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-rose-500/50 hover:bg-rose-500/10 text-slate-400 hover:text-rose-400 transition"
             title="Cerrar sesión"
           >
@@ -166,65 +162,62 @@ export default function ProfesorGruposPage() {
         </div>
       </div>
 
-      {noticia && (
-        <div className="p-3.5 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-emerald-200 text-xs flex items-center gap-2">
-          <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
-          <span>{noticia}</span>
+      {/* Grid de Grupos */}
+      {grupos.length === 0 ? (
+        <div className="p-12 text-center rounded-2xl border border-slate-800 bg-slate-900/40 space-y-3">
+          <BookOpen className="w-10 h-10 text-slate-600 mx-auto" />
+          <h3 className="text-base font-bold text-white">No tienes grupos asignados</h3>
+          <p className="text-xs text-slate-400 max-w-sm mx-auto">
+            La Jefatura de Carrera aún no te ha vinculado a grupos para este periodo escolar.
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          {grupos.map((grupo) => (
+            <div
+              key={grupo.id}
+              className="p-6 rounded-2xl bg-slate-900/60 border border-slate-800 flex flex-col justify-between hover:border-emerald-500/40 transition shadow-lg space-y-4"
+            >
+              <div>
+                <div className="flex items-center justify-between text-[11px] font-mono text-emerald-400 mb-1">
+                  <span>{grupo.claveMateria}</span>
+                  <span>{grupo.periodo}</span>
+                </div>
+                <h2 className="text-lg font-bold text-white leading-tight">
+                  {grupo.nombreMateria}
+                </h2>
+              </div>
+
+              <div className="space-y-2 text-xs text-slate-400 border-t border-slate-800/80 pt-3">
+                <div className="flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-slate-500 shrink-0" />
+                  <span>{grupo.horario}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Users className="w-4 h-4 text-slate-500 shrink-0" />
+                  <span>
+                    Inscritos: <strong className="text-white">{grupo.inscritosActuales}</strong> / {grupo.cupoMaximo}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <BookOpen className="w-4 h-4 text-slate-500 shrink-0" />
+                  <span>
+                    Unidades Temáticas: <strong className="text-emerald-400">{grupo.numeroUnidades} U</strong>
+                  </span>
+                </div>
+              </div>
+
+              <Link
+                href={`/profesor/calificaciones?grupoId=${grupo.id}`}
+                className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition inline-flex items-center justify-center gap-2 shadow-sm"
+              >
+                <span>Capturar Calificaciones</span>
+                <ChevronRight className="w-4 h-4" />
+              </Link>
+            </div>
+          ))}
         </div>
       )}
-
-      {/* Tabla de Actas para el Profesor */}
-      <div className="rounded-2xl border border-slate-800 bg-slate-900/60 overflow-hidden shadow-xl">
-        <table className="w-full text-left text-xs text-slate-300">
-          <thead className="bg-slate-950/80 text-slate-400 uppercase font-mono text-[11px] border-b border-slate-800">
-            <tr>
-              <th className="px-4 py-3">Matrícula</th>
-              <th className="px-4 py-3">Estudiante</th>
-              <th className="px-4 py-3">Materia</th>
-              <th className="px-3 py-3 text-center">U1</th>
-              <th className="px-3 py-3 text-center">U2</th>
-              <th className="px-3 py-3 text-center">U3</th>
-              <th className="px-4 py-3 text-center">Final</th>
-              <th className="px-4 py-3 text-center">Acción</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-800/60 font-mono">
-            {actas.map((acta) => (
-              <tr key={acta.id} className="hover:bg-slate-800/30 transition-colors">
-                <td className="px-4 py-3 font-bold text-white">{acta.matricula}</td>
-                <td className="px-4 py-3 font-sans text-slate-200">{acta.alumnoNombre}</td>
-                <td className="px-4 py-3 font-sans text-slate-400">{acta.materia}</td>
-                {[0, 1, 2].map((idx) => (
-                  <td key={idx} className="px-3 py-3 text-center">
-                    <input
-                      type="number"
-                      min="0"
-                      max="100"
-                      value={acta.unidades[idx] ?? ""}
-                      onChange={(e) => handleCalificacionChange(acta.id, idx, e.target.value)}
-                      placeholder="-"
-                      className="w-14 px-2 py-1 bg-slate-950 border border-slate-700 rounded-lg text-center text-white text-xs focus:ring-1 focus:ring-emerald-500 outline-none"
-                    />
-                  </td>
-                ))}
-                <td className="px-4 py-3 text-center font-bold text-emerald-400">
-                  {acta.calificacionFinal ?? "-"}
-                </td>
-                <td className="px-4 py-3 text-center">
-                  <button
-                    onClick={() => guardarCalificacion(acta)}
-                    disabled={guardandoId === acta.id}
-                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-sans font-semibold transition disabled:opacity-50 inline-flex items-center gap-1"
-                  >
-                    <Save className="w-3.5 h-3.5" />
-                    <span>{guardandoId === acta.id ? "Guardando..." : "Guardar"}</span>
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
     </div>
   );
 }

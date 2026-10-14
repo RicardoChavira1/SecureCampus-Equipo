@@ -9,11 +9,14 @@ import {
   doc, 
   getDoc, 
   updateDoc, 
-  deleteDoc,
-  setDoc,
-  addDoc,
+  deleteDoc, 
+  setDoc, 
+  addDoc, 
   serverTimestamp 
 } from "firebase/firestore";
+// Importamos módulos de Auth y App para instanciar la creación aislada
+import { initializeApp, getApps, getApp } from "firebase/app";
+import { getAuth, createUserWithEmailAndPassword, signOut as secondarySignOut } from "firebase/auth";
 import { auth, db } from "../../../lib/firebase";
 import { 
   ShieldCheck, 
@@ -24,14 +27,14 @@ import {
   AlertCircle, 
   Lock, 
   Unlock, 
-  RefreshCw,
-  GraduationCap,
-  Briefcase,
-  UserCheck,
-  Trash2,
-  Edit2,
-  X,
-  Save
+  RefreshCw, 
+  GraduationCap, 
+  Briefcase, 
+  UserCheck, 
+  Trash2, 
+  Edit2, 
+  X, 
+  Save 
 } from "lucide-react";
 
 interface UsuarioItem {
@@ -45,6 +48,20 @@ interface UsuarioItem {
   intentosFallidos?: number;
   carrera?: string;
 }
+
+// Oferta académica oficial del Instituto Tecnológico de Toluca (TecNM)
+const CARRERAS_ITTOLUCA = [
+  "INGENIERÍA EN TECNOLOGÍAS DE LA INFORMACIÓN Y COMUNICACIONES",
+  "INGENIERÍA EN SISTEMAS COMPUTACIONALES",
+  "INGENIERÍA MECATRÓNICA",
+  "INGENIERÍA ELECTRÓNICA",
+  "INGENIERÍA ELECTROMECÁNICA",
+  "INGENIERÍA INDUSTRIAL",
+  "INGENIERÍA QUÍMICA",
+  "INGENIERÍA EN GESTIÓN EMPRESARIAL",
+  "INGENIERÍA EN LOGÍSTICA",
+  "NO APLICA / PERSONAL ADMINISTRATIVO",
+];
 
 export default function AdminDashboardPage() {
   const router = useRouter();
@@ -61,18 +78,19 @@ export default function AdminDashboardPage() {
   // Formulario de Alta
   const [nombre, setNombre] = useState("");
   const [matricula, setMatricula] = useState("");
-  const [correo, setCorreo] = useState("");
+  const [correoUsuario, setCorreoUsuario] = useState("");
   const [password, setPassword] = useState("");
   const [rol, setRol] = useState<"ESTUDIANTE" | "PROFESOR" | "JEFE_CARRERA" | "ADMIN">("ESTUDIANTE");
-  const [materiaInicial, setMateriaInicial] = useState("DESARROLLO SEGURO");
+  const [carrera, setCarrera] = useState(CARRERAS_ITTOLUCA[0]);
   const [creando, setCreando] = useState(false);
 
   // Estado para Edición Rápida (Modal)
   const [usuarioEditando, setUsuarioEditando] = useState<UsuarioItem | null>(null);
   const [editNombre, setEditNombre] = useState("");
   const [editMatricula, setEditMatricula] = useState("");
+  const [editCarrera, setEditCarrera] = useState("");
 
-  // 1. Verificación RBAC de SysAdmin sin cuelgues
+  // 1. Verificación RBAC de SysAdmin
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!user) {
@@ -135,40 +153,61 @@ export default function AdminDashboardPage() {
     }
   };
 
-  // 3. Alta de Nuevo Usuario (CREATE)
+  // 3. Alta de Nuevo Usuario en Authentication + Firestore simultáneamente
   const handleCrearUsuario = async (e: React.FormEvent) => {
     e.preventDefault();
     setCreando(true);
     setMensaje(null);
 
+    const usuarioLimpio = correoUsuario.replace(/@.*$/, "").trim().toLowerCase();
+    const correoInstitucionalCompleto = `${usuarioLimpio}@toluca.tecnm.mx`;
+
     try {
-      const nuevoUid = `usr_${Date.now()}`;
-      await setDoc(doc(db, "usuarios", nuevoUid), {
+      // Configuración de la app secundaria en memoria para no desloguear al Admin
+      const appConfig = auth.app.options;
+      const secondaryApp = getApps().find(a => a.name === "SecondaryApp") || initializeApp(appConfig, "SecondaryApp");
+      const secondaryAuth = getAuth(secondaryApp);
+
+      // A) Crear cuenta en Firebase Authentication
+      const userCredential = await createUserWithEmailAndPassword(
+        secondaryAuth,
+        correoInstitucionalCompleto,
+        password
+      );
+
+      const nuevoAuthUid = userCredential.user.uid;
+
+      // Cerrar la sesión secundaria inmediatamente para que quede limpio
+      await secondarySignOut(secondaryAuth);
+
+      // B) Registrar el perfil en Firestore usando exactamente el mismo UID de Authentication
+      await setDoc(doc(db, "usuarios", nuevoAuthUid), {
+        uid: nuevoAuthUid,
         nombre: nombre.trim().toUpperCase(),
         matricula_nomina: matricula.trim(),
-        correo: correo.trim().toLowerCase(),
+        correo: correoInstitucionalCompleto,
         rol,
         activo: true,
         bloqueadoPorSeguridad: false,
         intentosFallidos: 0,
-        carrera: "INGENIERÍA EN TECNOLOGÍAS DE LA INFORMACIÓN Y COMUNICACIONES",
-        especialidad: rol === "ESTUDIANTE" ? "INGENIERÍA DE DATOS" : "DOCENCIA",
+        carrera: rol === "ADMIN" ? "NO APLICA / PERSONAL ADMINISTRATIVO" : carrera,
         estatusAcademico: "ACTIVO",
-        promedioGeneral: rol === "ESTUDIANTE" ? 85 : null,
+        promedioGeneral: null,
         creadoEn: serverTimestamp(),
         creadoPor: currentUser?.uid,
       });
 
-      // Emisión de log forense
+      // C) Emisión de log forense
       try {
         await addDoc(collection(db, "auditoria_logs"), {
           accion: "ALTA_USUARIO",
-          usuarioAfectado: correo.trim().toLowerCase(),
+          usuarioAfectado: correoInstitucionalCompleto,
+          uidAfectado: nuevoAuthUid,
           ejecutadoPor: currentUser?.email || currentUser?.uid,
           modulo: "ADMIN_DASHBOARD",
           severidad: "MEDIA",
           fecha: serverTimestamp(),
-          detalle: `SysAdmin aprovisionó cuenta ${rol} para ${nombre.trim().toUpperCase()}`
+          detalle: `SysAdmin aprovisionó cuenta en Auth y Firestore para ${nombre.trim().toUpperCase()} (${correoInstitucionalCompleto}) con rol ${rol}`,
         });
       } catch (logErr) {
         console.warn("Log de auditoría no persistido:", logErr);
@@ -176,17 +215,25 @@ export default function AdminDashboardPage() {
 
       setMensaje({
         tipo: "exito",
-        texto: `Usuario ${nombre} aprovisionado correctamente en Firestore con rol ${rol}.`,
+        texto: `Usuario ${nombre} aprovisionado con éxito en Firebase Authentication y Firestore.`,
       });
 
       setNombre("");
       setMatricula("");
-      setCorreo("");
+      setCorreoUsuario("");
       setPassword("");
       await cargarUsuarios();
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error al aprovisionar usuario:", err);
-      setMensaje({ tipo: "error", texto: "Error al registrar el usuario en Firestore." });
+      let errorTexto = "Error al registrar el usuario.";
+      if (err.code === "auth/email-already-in-use") {
+        errorTexto = "El correo ya está registrado en Firebase Authentication.";
+      } else if (err.code === "auth/weak-password") {
+        errorTexto = "La contraseña debe tener al menos 6 caracteres.";
+      } else if (err.code === "auth/invalid-email") {
+        errorTexto = "El formato de correo institucional no es válido.";
+      }
+      setMensaje({ tipo: "error", texto: errorTexto });
     } finally {
       setCreando(false);
     }
@@ -195,11 +242,9 @@ export default function AdminDashboardPage() {
   // 4. Modificación de Estado y Desbloqueo Real en Firestore (UPDATE / GOBERNANZA)
   const toggleEstadoUsuario = async (u: UsuarioItem) => {
     try {
-      // Si está bloqueado por seguridad o inactivo, se desbloquea; si no, se suspende
       const estaBloqueado = !u.activo || u.bloqueadoPorSeguridad;
-      const nuevoEstadoActivo = estaBloqueado; // Si estaba bloqueado, pasa a activo (true)
+      const nuevoEstadoActivo = estaBloqueado;
 
-      // Se actualizan obligatoriamente los tres campos en Firestore
       await updateDoc(doc(db, "usuarios", u.id), {
         activo: nuevoEstadoActivo,
         bloqueadoPorSeguridad: !nuevoEstadoActivo,
@@ -209,7 +254,6 @@ export default function AdminDashboardPage() {
         actualizadoPor: currentUser?.uid,
       });
 
-      // Emisión del log en auditoria_logs
       try {
         await addDoc(collection(db, "auditoria_logs"), {
           accion: nuevoEstadoActivo ? "DESBLOQUEO_MANUAL_CUENTA" : "BLOQUEO_ADMINISTRATIVO",
@@ -218,14 +262,12 @@ export default function AdminDashboardPage() {
           modulo: "ADMIN_DASHBOARD",
           severidad: nuevoEstadoActivo ? "MEDIA" : "ALTA",
           fecha: serverTimestamp(),
-          detalle: `SysAdmin ${nuevoEstadoActivo ? "desbloqueó y reseteó a 0 los intentos de" : "suspendió"} la cuenta ${u.nombre}`
+          detalle: `SysAdmin ${nuevoEstadoActivo ? "desbloqueó y reseteó a 0 los intentos de" : "suspendió"} la cuenta ${u.nombre}`,
         });
       } catch (logErr) {
         console.warn("No se pudo registrar log de auditoría:", logErr);
       }
 
-      // Actualizar estado local reactivo
-      // Actualizar estado local reactivo
       setUsuarios((prev) =>
         prev.map((item): UsuarioItem => {
           if (item.id !== u.id) return item;
@@ -280,6 +322,7 @@ export default function AdminDashboardPage() {
       await updateDoc(doc(db, "usuarios", usuarioEditando.id), {
         nombre: editNombre.trim().toUpperCase(),
         matricula_nomina: editMatricula.trim(),
+        carrera: editCarrera,
         actualizadoEn: serverTimestamp(),
         actualizadoPor: currentUser?.uid,
       });
@@ -287,7 +330,12 @@ export default function AdminDashboardPage() {
       setUsuarios((prev) =>
         prev.map((u) =>
           u.id === usuarioEditando.id
-            ? { ...u, nombre: editNombre.trim().toUpperCase(), matricula_nomina: editMatricula.trim() }
+            ? { 
+                ...u, 
+                nombre: editNombre.trim().toUpperCase(), 
+                matricula_nomina: editMatricula.trim(),
+                carrera: editCarrera 
+              }
             : u
         )
       );
@@ -321,7 +369,8 @@ export default function AdminDashboardPage() {
       u.nombre.toLowerCase().includes(filtro.toLowerCase()) ||
       u.correo.toLowerCase().includes(filtro.toLowerCase()) ||
       u.matricula_nomina.includes(filtro) ||
-      u.rol.toLowerCase().includes(filtro.toLowerCase())
+      u.rol.toLowerCase().includes(filtro.toLowerCase()) ||
+      (u.carrera && u.carrera.toLowerCase().includes(filtro.toLowerCase()))
   );
 
   if (loadingAuth) {
@@ -368,7 +417,7 @@ export default function AdminDashboardPage() {
             Gestión Central de Usuarios y Plantillas
           </h1>
           <p className="text-xs text-slate-400">
-            Aprovisionamiento, modificación de privilegios, trazabilidad y reactivación inmediata de cuentas.
+            Aprovisionamiento simultáneo en Authentication y Firestore con gobernanza de seguridad.
           </p>
         </div>
 
@@ -399,11 +448,11 @@ export default function AdminDashboardPage() {
               </div>
               <h2 className="text-lg font-bold text-white">Alta sin Consola Manual</h2>
               <p className="text-xs text-slate-400 leading-relaxed">
-                Al registrar a cualquier miembro, el sistema asocia las reglas institucionales, genera su identidad y siembra sus actas sin requerir intervención en la consola.
+                El sistema crea las credenciales en **Firebase Authentication** y asocia de inmediato su perfil en **Firestore** con el mismo UID oficial.
               </p>
             </div>
             <div className="text-[11px] text-slate-500 space-y-1.5 pt-4 border-t border-slate-800 font-mono">
-              <p className="flex items-center gap-1.5"><GraduationCap className="w-3.5 h-3.5 text-blue-400" /> Estudiantes: Crea expediente y acta inicial.</p>
+              <p className="flex items-center gap-1.5"><GraduationCap className="w-3.5 h-3.5 text-blue-400" /> Estudiantes: Expediente y carga reticular.</p>
               <p className="flex items-center gap-1.5"><Briefcase className="w-3.5 h-3.5 text-emerald-400" /> Docentes: Habilita el portal de captura.</p>
               <p className="flex items-center gap-1.5"><UserCheck className="w-3.5 h-3.5 text-purple-400" /> Jefaturas: Habilita apertura de grupos.</p>
             </div>
@@ -450,15 +499,25 @@ export default function AdminDashboardPage() {
               </div>
 
               <div>
-                <label className="block text-[10px] font-mono uppercase text-slate-400 mb-1">Correo Institucional</label>
-                <input
-                  type="email"
-                  required
-                  value={correo}
-                  onChange={(e) => setCorreo(e.target.value)}
-                  placeholder="usuario@toluca.tecnm.mx"
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-amber-500 font-mono"
-                />
+                <label className="block text-[10px] font-mono uppercase text-slate-400 mb-1">
+                  Correo Institucional (Usuario)
+                </label>
+                <div className="flex items-center rounded-xl bg-slate-950 border border-slate-700 overflow-hidden focus-within:ring-1 focus-within:ring-amber-500">
+                  <input
+                    type="text"
+                    required
+                    value={correoUsuario}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/@.*$/, "").trim().toLowerCase();
+                      setCorreoUsuario(val);
+                    }}
+                    placeholder="jefatura.quimica"
+                    className="w-full px-3 py-2 bg-transparent text-xs text-white focus:outline-none font-mono"
+                  />
+                  <span className="px-3 py-2 text-[11px] font-mono text-amber-400/90 bg-slate-900 border-l border-slate-800 select-none whitespace-nowrap">
+                    @toluca.tecnm.mx
+                  </span>
+                </div>
               </div>
 
               <div>
@@ -474,15 +533,16 @@ export default function AdminDashboardPage() {
               </div>
 
               <div>
-                <label className="block text-[10px] font-mono uppercase text-slate-400 mb-1">Materia Inicial</label>
+                <label className="block text-[10px] font-mono uppercase text-slate-400 mb-1">Carrera / Adscripción (TecNM Toluca)</label>
                 <select
-                  value={materiaInicial}
-                  onChange={(e) => setMateriaInicial(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  value={carrera}
+                  onChange={(e) => setCarrera(e.target.value)}
+                  disabled={rol === "ADMIN"}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-amber-500 disabled:opacity-50"
                 >
-                  <option value="DESARROLLO SEGURO">DESARROLLO SEGURO</option>
-                  <option value="REDES CONCURRENTES">REDES CONCURRENTES</option>
-                  <option value="TALLER DE INVESTIGACIÓN">TALLER DE INVESTIGACIÓN</option>
+                  {CARRERAS_ITTOLUCA.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
                 </select>
               </div>
             </div>
@@ -492,12 +552,12 @@ export default function AdminDashboardPage() {
               disabled={creando}
               className="w-full py-2.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl transition shadow-md shadow-amber-600/20"
             >
-              {creando ? "Aprovisionando en Firestore..." : "Generar Cuenta y Aprovisionar en Firestore"}
+              {creando ? "Creando en Authentication y Firestore..." : "Generar Cuenta y Aprovisionar en Firestore"}
             </button>
           </form>
         </div>
 
-        {/* Sección 2: CRUD y Gobernanza de Cuentas (READ, UPDATE, DELETE) */}
+        {/* Sección 2: CRUD y Gobernanza de Cuentas */}
         <div className="space-y-4 pt-6 border-t border-slate-800">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
@@ -514,7 +574,7 @@ export default function AdminDashboardPage() {
                   type="text"
                   value={filtro}
                   onChange={(e) => setFiltro(e.target.value)}
-                  placeholder="Buscar por nombre, correo, rol..."
+                  placeholder="Buscar por nombre, correo, carrera..."
                   className="pl-8 pr-3 py-1.5 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 w-64"
                 />
               </div>
@@ -536,6 +596,7 @@ export default function AdminDashboardPage() {
                   <tr>
                     <th className="px-4 py-3">Nómina / Matrícula</th>
                     <th className="px-4 py-3">Nombre</th>
+                    <th className="px-4 py-3">Carrera / Adscripción</th>
                     <th className="px-4 py-3">Correo Institucional</th>
                     <th className="px-4 py-3">Rol (RBAC)</th>
                     <th className="px-4 py-3 text-center">Estado</th>
@@ -545,7 +606,7 @@ export default function AdminDashboardPage() {
                 <tbody className="divide-y divide-slate-800/60 font-mono">
                   {usuariosFiltrados.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-4 py-6 text-center text-slate-500">
+                      <td colSpan={7} className="px-4 py-6 text-center text-slate-500">
                         No se encontraron usuarios registrados o coincidentes.
                       </td>
                     </tr>
@@ -556,6 +617,9 @@ export default function AdminDashboardPage() {
                         <tr key={u.id} className="hover:bg-slate-800/40 transition">
                           <td className="px-4 py-3 font-semibold text-slate-300">{u.matricula_nomina}</td>
                           <td className="px-4 py-3 font-sans font-bold text-white">{u.nombre}</td>
+                          <td className="px-4 py-3 font-sans text-slate-400 text-[11px]">
+                            {u.carrera || "NO ASIGNADA"}
+                          </td>
                           <td className="px-4 py-3 text-slate-400">{u.correo}</td>
                           <td className="px-4 py-3">
                             <select
@@ -582,7 +646,6 @@ export default function AdminDashboardPage() {
                           </td>
                           <td className="px-4 py-3 text-center font-sans">
                             <div className="flex items-center justify-center gap-1.5">
-                              {/* Botón de Bloqueo/Desbloqueo completo de Firestore */}
                               <button
                                 onClick={() => toggleEstadoUsuario(u)}
                                 title={!estaBloqueado ? "Bloquear acceso" : "Desbloquear de inmediato (resetear intentos en Firestore)"}
@@ -595,12 +658,12 @@ export default function AdminDashboardPage() {
                                 {!estaBloqueado ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
                               </button>
 
-                              {/* Editar */}
                               <button
                                 onClick={() => {
                                   setUsuarioEditando(u);
                                   setEditNombre(u.nombre);
                                   setEditMatricula(u.matricula_nomina);
+                                  setEditCarrera(u.carrera || CARRERAS_ITTOLUCA[0]);
                                 }}
                                 title="Editar datos del usuario"
                                 className="p-1.5 rounded-lg bg-blue-950/40 border border-blue-800/60 text-blue-300 hover:bg-blue-900/60 transition"
@@ -608,7 +671,6 @@ export default function AdminDashboardPage() {
                                 <Edit2 className="w-3.5 h-3.5" />
                               </button>
 
-                              {/* Eliminar */}
                               <button
                                 onClick={() => handleEliminarUsuario(u)}
                                 title="Eliminar usuario permanentemente"
@@ -663,6 +725,19 @@ export default function AdminDashboardPage() {
                     onChange={(e) => setEditMatricula(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-blue-500 font-mono"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-mono uppercase text-slate-400 mb-1">Carrera / Adscripción</label>
+                  <select
+                    value={editCarrera}
+                    onChange={(e) => setEditCarrera(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-blue-500"
+                  >
+                    {CARRERAS_ITTOLUCA.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
                 </div>
 
                 <div>

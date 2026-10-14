@@ -57,29 +57,68 @@ export default function CalificacionesPage() {
           return;
         }
 
-        // 2. Consulta a la base de datos ligada exclusivamente al usuario autenticado (Anti-IDOR)
-        const q = query(
-          collection(db, "calificaciones"),
+        // 2. Obtener inscripciones reales del alumno
+        const qInscripciones = query(
+          collection(db, "inscripciones"),
           where("alumnoUid", "==", currentUser.uid)
         );
-        const querySnapshot = await getDocs(q);
+        const [inscripcionesSnap, gruposSnap, calificacionesSnap] = await Promise.all([
+          getDocs(qInscripciones),
+          getDocs(collection(db, "grupos")),
+          getDocs(query(collection(db, "calificaciones"), where("alumnoUid", "==", currentUser.uid)))
+        ]);
 
-        const materiasDb: CalificacionMateria[] = [];
-        querySnapshot.forEach((docSnap) => {
-          const d = docSnap.data();
-          materiasDb.push({
-            id: docSnap.id,
-            semestre: d.semestre || 9,
-            nombre: d.materia || "Materia sin nombre",
-            creditos: d.creditos || 5,
-            unidades: d.unidades || [null, null, null, null, null, null, null, null, null],
-            calificacionFinal: d.calificacionFinal ?? null,
+        const mapaGrupos = new Map<string, any>();
+        gruposSnap.forEach((g) => mapaGrupos.set(g.id, g.data()));
+
+        const mapaCalificaciones = new Map<string, any>();
+        calificacionesSnap.forEach((c) => {
+          const cData = c.data();
+          if (cData.grupoId) {
+            mapaCalificaciones.set(cData.grupoId, cData);
+          }
+        });
+
+        // 3. Cruzar inscripciones para garantizar que toda materia inscrita aparezca
+        const materiasLista: CalificacionMateria[] = [];
+
+        inscripcionesSnap.forEach((inscDoc) => {
+          const inscData = inscDoc.data();
+          const grupoId = inscData.grupoId;
+          const grupoInfo = mapaGrupos.get(grupoId);
+          const califInfo = mapaCalificaciones.get(grupoId);
+
+          const totalUnidades = Number(grupoInfo?.numeroUnidades || 3);
+
+          let unidadesArr: (number | null)[] = [];
+          if (califInfo?.unidades && Array.isArray(califInfo.unidades)) {
+            unidadesArr = [...califInfo.unidades];
+          } else if (califInfo) {
+            for (let i = 1; i <= 9; i++) {
+              const uVal = califInfo[`u${i}`];
+              unidadesArr.push(typeof uVal === "number" ? uVal : null);
+            }
+          }
+
+          while (unidadesArr.length < 9) {
+            unidadesArr.push(null);
+          }
+          unidadesArr = unidadesArr.slice(0, 9);
+
+          materiasLista.push({
+            id: inscDoc.id,
+            semestre: 9,
+            nombre: grupoInfo?.nombreMateria || "Materia Inscrita",
+            creditos: 5,
+            unidades: unidadesArr,
+            calificacionFinal: typeof califInfo?.calificacionFinal === "number" ? califInfo.calificacionFinal : null,
           });
         });
 
-        setCalificaciones(materiasDb);
+        setCalificaciones(materiasLista);
       } catch (err: unknown) {
-        setErrorMsg("No se pudo cargar la información académica en este momento. Intenta más tarde.");
+        console.error("Error al consultar calificaciones:", err);
+        setErrorMsg("No se pudo cargar la información académica en este momento.");
       } finally {
         setLoading(false);
       }
@@ -153,15 +192,14 @@ export default function CalificacionesPage() {
         </div>
       </div>
 
-      {/* Estado Vacío Institucional (Sin fugas técnicas) */}
       {calificaciones.length === 0 ? (
         <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-12 text-center space-y-3">
           <div className="w-12 h-12 bg-blue-500/10 border border-blue-500/20 rounded-2xl flex items-center justify-center mx-auto text-blue-400">
             <FileSpreadsheet className="w-6 h-6" />
           </div>
-          <h3 className="text-base font-bold text-white">Sin calificaciones registradas para este periodo</h3>
+          <h3 className="text-base font-bold text-white">Sin materias inscritas en este periodo</h3>
           <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
-            Actualmente no se tienen actas de evaluación emitidas o capturadas por los docentes. Si consideras que se trata de una inconsistencia con tu carga académica, comunícate con la División de Estudios Profesionales o Servicios Escolares.
+            No tienes materias en tu carga académica actual. Dirígete a la pestaña de Carga para seleccionar materias.
           </p>
         </div>
       ) : (
@@ -203,7 +241,13 @@ export default function CalificacionesPage() {
                       </td>
                     ))}
                     <td className="px-4 py-3 text-center font-bold text-white">
-                      {m.calificacionFinal ?? "-"}
+                      {m.calificacionFinal !== null ? (
+                        <span className={`px-2 py-0.5 rounded ${m.calificacionFinal >= 70 ? 'text-emerald-400 font-black' : 'text-rose-400'}`}>
+                          {m.calificacionFinal}
+                        </span>
+                      ) : (
+                        <span className="text-slate-600">-</span>
+                      )}
                     </td>
                   </tr>
                 ))}
