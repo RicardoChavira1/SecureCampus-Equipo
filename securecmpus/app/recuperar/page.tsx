@@ -12,7 +12,7 @@ export default function RecuperarPage() {
   const [feedbackMsg, setFeedbackMsg] = useState<{ tipo: "info" | "error"; texto: string } | null>(null);
 
   // Lista blanca estricta de dominios institucionales válidos
-  const DOMINIOS_VALIDOS = ["@toluca.tecnm.mx", "@ittoluca.edu.mx"];
+  const DOMINIOS_VALIDOS = ["@toluca.tecnm.mx", "@gmail.com"];
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -29,7 +29,7 @@ export default function RecuperarPage() {
       setLoading(false);
       setFeedbackMsg({
         tipo: "error",
-        texto: "Acceso restringido: Solo se admiten correos institucionales (@toluca.tecnm.mx o @ittoluca.edu.mx).",
+        texto: "Acceso restringido: Solo se admiten correos institucionales (@toluca.tecnm.mx).",
       });
       return;
     }
