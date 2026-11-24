@@ -1,67 +1,0 @@
-SC-LAB-009
-DevSecOps y despliegue seguro de SecureCampus
-GUÍA PASO A PASO PARA ESTUDIANTES · Laboratorio asistido, sin programación desde cero
-Ficha académicaDescripciónAsignaturaDesarrollo Seguro · Tema 3.5SubtemaPrácticas DevSecOps y despliegue seguroProyectoSecureCampus · continuación de SC-LAB-007 y SC-LAB-008ModalidadDemostración guiada, parejas o equipos de cuatroRequisitosWindows, Python, Visual Studio Code; internet para paquetes y GitHub; Docker y GitHub opcionales para la etapa ampliadaPropósito y reglas del laboratorio
-Veremos cómo integrar pruebas automatizadas y análisis de seguridad al proceso de desarrollo. El proyecto ya contiene código, pruebas, Dockerfile y el pipeline de GitHub Actions: tu tarea será ejecutar, observar, interpretar y documentar, no construirlos desde cero.
-Trabaja únicamente con cuentas ficticias, sobre tu copia local. No utilices datos académicos reales, credenciales personales ni publiques archivos .db, .venv o secretos.
-Al finalizar podrás
-* Explicar qué es integración continua (CI) y qué diferencia tiene con el despliegue continuo (CD).
-* Ejecutar pytest, Bandit (SAST) y pip-audit (análisis de dependencias).
-* Reconocer las etapas de un pipeline ya configurado en GitHub Actions.
-* Interpretar fallos y distinguir un hallazgo real de un problema de configuración.
-* Describir controles de seguridad para imágenes Docker y despliegues.
-Itinerario de 5 horas
-BloqueTiempoQué haremos1 · Conceptos45 minCI/CD, DevSecOps, SAST, SCA y análisis de imágenes2 · Preparación30 minAbrir proyecto y configurar entorno virtual3 · Controles locales75 minpytest, Bandit, pip-audit y evidencias4 · Pipeline visual60 minLeer YAML y observar GitHub Actions (demostración opcional)5 · Cierre30 minDocker/Trivy, reflexión y entrega1. Comprender DevSecOps sin tecnicismos
-Imagina que una persona modifica SecureCampus. En lugar de confiar en que alguien revise todo manualmente, un proceso automático ejecuta pruebas y análisis. Si un control falla, el equipo debe investigar antes de aprobar el cambio.
-CAMBIO DE CÓDIGO ? GITHUB ? PYTEST ? BANDIT ? PIP-AUDIT
-                                  ? CONSTRUIR IMAGEN ? TRIVY
-                      RESULTADOS ? REVISIÓN HUMANA ? DESPLIEGUE CONTROLADOHerramientaPregunta que respondepytest¿Se cumplen los comportamientos que probamos?Bandit (SAST)¿Hay patrones de código Python potencialmente inseguros?pip-audit (SCA)¿Existen vulnerabilidades conocidas en las dependencias?Trivy¿La imagen de contenedor contiene vulnerabilidades detectables?GitHub Actions¿Podemos ejecutar estos controles automáticamente al subir cambios?Una ejecución en verde no equivale a “software 100 % seguro”; las herramientas tienen alcances y limitaciones. No desactives controles solo para obtener una marca verde.
-2. Preparar el proyecto en Windows + Visual Studio Code
-1. Descarga SecureCampus_SC-LAB-009_GUIADO.zip y descomprímelo en C:\Proyectos.
-2. Abre Visual Studio Code y selecciona Archivo > Abrir carpeta > SecureCampus_SC-LAB-009_GUIADO.
-3. Abre Terminal > Nueva terminal. Comprueba que el prompt termina en la carpeta del proyecto.
-4. Si tienes abierto otro laboratorio que utiliza el puerto 5000, puedes dejarlo cerrado: este laboratorio no necesita iniciar el servidor para ejecutar los análisis.
-En PowerShell ejecuta estos comandos uno por uno:
-python --version
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt -r requirements-dev.txtResultado esperado: el prompt comienza con (.venv) y la instalación termina sin errores. Si hay restricciones de PowerShell, usa Set-ExecutionPolicy -Scope Process Bypass y vuelve a activar el entorno. La descarga de paquetes necesita internet.
-3. Primer control: ejecutar pytest
-python -m pytest -q
-Observa el resumen: pruebas aprobadas, fallidas y tiempo de ejecución. El proyecto amplía los laboratorios anteriores y contiene pruebas preparadas. La cifra exacta puede variar si se agregaron pruebas; registra el resultado real, sin inventarlo.
-Evidencia A: captura del comando y resumen final. Pregunta: ¿qué verifica una prueba automatizada que no necesariamente verifica un analizador estático?
-4. Segundo control: análisis estático de seguridad (SAST)
-python -m bandit -r src -ll -ii
-Bandit inspecciona archivos Python en la carpeta src. La opción -r recorre subcarpetas; -ll filtra a severidad media/alta y -ii a confianza media/alta. Puede reportar hallazgos o finalizar sin ellos; ambas salidas deben interpretarse, no suponerse.
-Evidencia B: captura del resultado. Si hay advertencias, registra archivo, línea, gravedad y recomendación; no cambies el código por tu cuenta durante esta primera exploración.
-5. Tercer control: seguridad de dependencias (SCA)
-python -m pip_audit -r requirements.txtpip-audit compara dependencias resueltas con bases de avisos de vulnerabilidades. Requiere red; los hallazgos pueden cambiar con el tiempo. Un error de conectividad no significa “cero vulnerabilidades”.
-Evidencia C: anota si hubo vulnerabilidades, cuáles paquetes afectó y qué versión corregida propone la herramienta (si la muestra).
-
-6. Conozcamos nuestro pipeline sin tener que escribirlo
-En VS Code abre .github/workflows/security.yml. Un archivo YAML describe qué hace GitHub Actions cuando ocurre un push, una solicitud de integración (pull request) o una ejecución manual.
-Parte del archivoQué observaron: push / pull_request / workflow_dispatchCuándo inicia el pipelinejobs: securityPruebas pytest, análisis Bandit y auditoría de dependenciasjobs: containerConstrucción de imagen y escaneo con Trivyruns-on: ubuntu-latestLa ejecución ocurre en un equipo Linux de GitHubexit-code: 1Hallazgos configurados pueden marcar el trabajo como fallidoEvidencia D: captura del YAML abierto en VS Code y explica con tus palabras el orden de los controles. Si GitHub no está disponible, esta revisión local satisface la actividad principal.
-
-7. Experiencia visual opcional: GitHub Actions
-Esta fase requiere Git, internet y una cuenta de GitHub. Puede realizarla la profesora frente al grupo o cada equipo en un repositorio de laboratorio. Revisa el archivo .gitignore antes de subir el proyecto.
-1. Crea un repositorio de laboratorio vacío en GitHub (preferentemente privado).
-2. En VS Code, abre una terminal dentro del proyecto; ejecuta git init, git add . y git commit -m "SC-LAB-009: laboratorio guiado".
-3. Sigue las instrucciones que GitHub muestre para conectar el repositorio remoto y subir la rama; no copies contraseñas ni tokens en el código.
-4. En GitHub abre la pestaña Actions y selecciona “SC-LAB-009 | Controles DevSecOps”.
-5. Abre los trabajos security y container; identifica pasos exitosos, fallidos o pendientes. Registra un hallazgo si aparece, en vez de ocultarlo.
-La ejecución de GitHub puede mostrar alertas por cambios en dependencias, imágenes base o servicios. Eso forma parte del aprendizaje; el éxito de la práctica consiste en interpretar el resultado.
-8. Docker y escaneo de imágenes (opcional)
-Si tienes Docker Desktop instalado y ejecutándose, abre una terminal en la carpeta del laboratorio y escribe:
-docker build -t securecampus:lab009 .
-docker imagesConstruir una imagen correctamente NO prueba que esté libre de vulnerabilidades. El trabajo container de GitHub ejecuta Trivy, que inspecciona paquetes del sistema y bibliotecas. Una alerta HIGH o CRITICAL puede detener el trabajo; no equivale a un fallo del estudiante.
-Sin Docker: abre Dockerfile y compose.yaml, localiza USER scapp, read_only: true, cap_drop: ALL y el puerto vinculado a 127.0.0.1. Explica para qué sirve cada medida. No afirmes haber ejecutado un contenedor si solo revisaste la configuración.
-
-
-9. Solución de problemas frecuentes
-SituaciónQué revisarNo se reconoce pythonInstalación o alias de Python; prueba py --version y usa py -m ... si corresponde.No aparece (.venv)Activa el entorno desde la carpeta del proyecto.La instalación fallaRevisa internet, errores de certificados y versión de Python.Bandit o pip-audit no se reconoceUsa siempre python -m bandit o python -m pip_audit con el entorno activo.pip-audit falla por avisosDocumenta paquete, versión y recomendación. No ignores el aviso.GitHub Actions fallaAbre el paso rojo: distingue hallazgos, instalación fallida o configuración.Docker no está disponibleRealiza la ruta sin Docker y analiza los archivos de configuración.10. Evidencias y evaluación
-Usa docs/EVIDENCIAS_PLANTILLA.md (incluido en el ZIP) o prepara un documento con las mismas secciones. Entrega las capturas y una reflexión de seis a diez líneas.
-CriterioValorEjecución y registro de pytest20 %Interpretación de Bandit (SAST)20 %Interpretación de pip-audit (SCA)20 %Comprensión de pipeline y Docker/Trivy25 %Conclusiones y claridad de evidencias15 %
-TECNM  •  DESARROLLO SEGURO                                      SECURECAMPUS  /  SC-LAB-009
-
-Guía guiada del estudiante  •  Datos de demostración únicamente  •  Tema 3.5
-
